@@ -4,7 +4,6 @@ import os
 import tensorflow as tf
 from tqdm import tqdm
 
-import tensorflow_datasets as tfds
 import random
 import chess
 import warnings
