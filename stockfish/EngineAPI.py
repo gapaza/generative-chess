@@ -34,14 +34,48 @@ class EngineAPI:
 
         return self.evaluate_board(board)
 
+
+    def get_forced_mate(self, board):
+        analysis = self.engine.analyse(board, chess.engine.Limit(nodes=self.nodes), multipv=1)
+        line = analysis[0]
+        print(line)
+        score = line["score"].white()
+
+        if score.is_mate():
+            moves = line['pv']
+            moves = [move.uci() for move in moves]
+            return moves, score
+        else:
+            return None, None
+
+
     def evaluate_board(self, board):
         analysis = self.engine.analyse(board, chess.engine.Limit(nodes=self.nodes), multipv=self.lines)
 
         for idx, line in enumerate(analysis):
-            # line_top_move = line["pv"][0].uci()
-            line_top_move_score = line["score"].white().score() / 100.0
+            print(line)
 
-            print(line_top_move_score)
+
+            # line_top_move = line["pv"][0].uci()
+            line_top_move_score = line["score"].white().score()
+            if line_top_move_score:
+                line_top_move_score_norm = line_top_move_score / 100.0
+            else:
+                # it must be a forced mate, check if it is
+                print(board.fen())
+                line_top_move_score_norm = 0.0
+
+
+            score = line["score"]
+            if score.is_mate():
+                print(score.white().mate())
+                print(f"mate in {score.white().mate()}")
+                exit(0)
+            else:
+                print(f"cp: {score.relative.score()}")
+
+
+            return line_top_move_score_norm
 
 
 

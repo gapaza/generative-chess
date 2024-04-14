@@ -18,7 +18,6 @@ else:
 # Distributed Training
 distributed = False
 mirrored_strategy = tf.distribute.MirroredStrategy()
-global_batch_size = 32  # 64, 128, 256, 512, 1024
 
 
 
@@ -78,6 +77,7 @@ dropout = 0.1
 # --> Training
 pt_dataset = os.path.join(datasets_dir, 'test-dataset')
 epochs = 200
+global_batch_size = 256  # 64, 128, 256, 512, 1024
 
 
 
@@ -96,6 +96,7 @@ epochs = 200
 import tensorflow as tf
 from keras.layers import TextVectorization
 import re
+from copy import deepcopy
 
 def custom_standardization(input_data):
     # lowercase = tf.strings.lower(input_data)
@@ -116,12 +117,14 @@ special_tokens = ["[pos]", "[mask]", '[start]']
 
 num_special_tokens = len(special_tokens) + 2
 vocab = []
+uci_move_tokens = []
 with open(vocab_file, 'rb') as f:
     vocab = list(pickle.load(f))
     # remove empty string and [UNK]
     if '' in vocab:
         vocab.remove('')
     vocab.sort()
+    uci_move_tokens = deepcopy(vocab)
 vocab = special_tokens + vocab + end_of_game_tokens
 vocab_size = len(vocab)
 tokenizer = TextVectorization(

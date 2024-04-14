@@ -26,7 +26,7 @@ if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
 
-small_ds = True
+small_ds = False
 uci_dir = os.path.join(config.games_dir, 'chesscom')
 
 
