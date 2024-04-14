@@ -37,6 +37,9 @@ use_critic_warmup = False
 
 pickup_epoch = 0
 
+run_dir = 0
+run_dir_itr = 0
+
 
 class SelfPlayTask(AbstractTask):
 
@@ -85,8 +88,8 @@ class SelfPlayTask(AbstractTask):
 
         # Stockfish Engine
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
-        self.engine.configure({'Threads': 8, "Hash": 1024})
-        self.nodes = 1000000
+        self.engine.configure({'Threads': 12, "Hash": 1024})
+        self.nodes = 100000
         self.lines = 1
 
 
@@ -676,13 +679,13 @@ if __name__ == '__main__':
     # critic_path = None
 
     task = SelfPlayTask(
-        run_num=0,
+        run_num=run_dir,
         problem=None,
         epochs=500,
         actor_load_path=actor_path,
         critic_load_path=critic_path,
         debug=True,
         run_val=False,
-        val_itr=2,
+        val_itr=run_dir_itr,
     )
     task.run()

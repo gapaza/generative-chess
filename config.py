@@ -51,7 +51,7 @@ if not os.path.exists(games_dir):
 
 
 
-stockfish_path = os.path.join(root_dir, 'stockfish', 'stockfish', 'stockfish-ubuntu-x86-64-avx2')
+stockfish_path = os.path.join(root_dir, 'stockfish', 'stockfish', 'stockfish_14.1_linux_x64_avx2')
 
 
 
