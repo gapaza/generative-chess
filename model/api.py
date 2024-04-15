@@ -114,5 +114,5 @@ class ChessGPT_API:
 
 
 if __name__ == '__main__':
-    interface = DecoderInterface()
+    interface = ChessGPT_API()
     interface.play_interactive_game()

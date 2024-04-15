@@ -3,14 +3,14 @@ import chess.pgn
 import os
 import tensorflow as tf
 from tqdm import tqdm
-
+import concurrent.futures
 import random
 import chess
 import warnings
 
 import threading
 import multiprocessing
-# multiprocessing.set_start_method('fork')
+multiprocessing.set_start_method('fork')
 import time
 import sys
 import math
@@ -21,7 +21,8 @@ from preprocess.strategies import language_modeling
 
 
 
-curr_dataset = config.pt_dataset
+# curr_dataset = config.pt_dataset
+curr_dataset = os.path.join(config.datasets_dir, 'test-dataset-chesscom-mate')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -82,16 +83,18 @@ class PT_DatasetGenerator:
 
 
         print("Parsing train dataset...")
-        train_dataset = self.parse_memory_dataset(train_move_files)
+        # train_dataset = self.parse_memory_dataset(train_move_files)
         # train_dataset = self.parse_memory_dataset_piece(train_move_files)
+        train_dataset = self.parse_mate_dataset_piece(train_move_files, self.dataset_dir)
         print("Parsing val dataset...")
-        val_dataset = self.parse_memory_dataset(val_move_files)
+        # val_dataset = self.parse_memory_dataset(val_move_files)
         # val_dataset = self.parse_memory_dataset_piece(val_move_files)
+        val_dataset = self.parse_mate_dataset_piece(val_move_files, self.dataset_dir)
 
-        if save:
-            self.save_datasets(train_dataset, val_dataset)
-
-        return train_dataset, val_dataset
+        # if save:
+        #     self.save_datasets(train_dataset, val_dataset)
+        #
+        # return train_dataset, val_dataset
 
     def balance_val_files(self, val_files, kill=False):
         cc_count = 0
@@ -105,6 +108,104 @@ class PT_DatasetGenerator:
         if cc_count < 2 or mil_count < 2:
             if kill is True:
                 exit(0)
+
+
+
+    def parse_mate_dataset(self, move_files):
+        full_dataset = tf.data.TextLineDataset(move_files)
+
+
+
+
+
+
+
+
+    @staticmethod
+    def parse_mate_dataset_piece(file_list, dataset_dir):
+
+        file_list.append(dataset_dir)
+        file_list.append(0)
+        PT_DatasetGenerator.parse_mate_dataset_piece_proc(file_list)
+        #
+        # num_processes = 12
+        # k = len(file_list) // num_processes
+        # file_batches = [file_list[i * k:(i + 1) * k] for i in range(num_processes)]
+        # # print('File batches:', len(file_batches), 'files per batch:', k)
+        # # for idx, batch in enumerate(file_batches):
+        # #     print('Batch:', idx, 'Files:', batch)
+        # # exit(0)
+        #
+        # # If the division isn't perfect, handle the remainder
+        # remainder = len(file_list) % num_processes
+        # for i in range(remainder):
+        #     file_batches[i].append(file_list[-(i + 1)])
+        #
+        # for idx, batch in enumerate(file_batches):
+        #     batch.append(dataset_dir)
+        #     batch.append(idx)
+        #
+        # # Process in parallel
+        # # with concurrent.futures.ProcessPoolExecutor(max_workers=num_processes) as executor:
+        # #     results = list(executor.map(PT_DatasetGenerator.parse_mate_dataset_piece_proc, file_batches))
+        #
+        # with multiprocessing.Pool(1) as pool:
+        #     pool.map(PT_DatasetGenerator.parse_mate_dataset_piece_proc, file_batches)
+
+    @staticmethod
+    def parse_mate_dataset_piece_proc(text_dataset):
+        # pop off last item in text_dataset list
+        file_idx = text_dataset.pop()
+        dataset_dir = text_dataset.pop()
+        text_dataset = tf.data.TextLineDataset(text_dataset)
+        # text_dataset = text_dataset.take(100)
+        # return text_dataset
+        parsed_games = []
+
+        for text_tensor in tqdm(text_dataset, total=4000000):
+            uci_game = text_tensor.numpy().decode('utf-8')
+            uci_game_moves = uci_game.split(' ')
+            game = chess.Board()
+            parsed_moves = []
+            for idx, uci_move in enumerate(uci_game_moves):
+                # print('Move:', uci_move)
+                if uci_move in config.special_tokens or uci_move == '' or uci_move in config.end_of_game_tokens:
+                    parsed_games.append(parsed_moves)
+                    break
+                # print('Move:', uci_move)
+                move = chess.Move.from_uci(uci_move)
+                if move in game.legal_moves:
+                    game.push_uci(uci_move)
+                    parsed_moves.append(uci_move)
+                    # Check for mate
+                    if game.is_checkmate():
+                        # if white wins
+                        if game.result() == '1-0':
+                            parsed_moves.append('[white]')
+                        # if black wins
+                        elif game.result() == '0-1':
+                            parsed_moves.append('[black]')
+                        # print('CHECKMATE:', ' '.join(parsed_moves))
+
+                        parsed_games.append(parsed_moves)
+                        break
+                else:
+                    # print('Illegal move')
+                    parsed_games.append(parsed_moves)
+                    break
+
+
+
+        all_games = []
+        for game in parsed_games:
+            all_games.append(' '.join(game))
+
+        new_text_dataset_path = os.path.join(dataset_dir, 'mate_dataset_' + str(file_idx))
+        new_text_dataset = tf.data.Dataset.from_tensor_slices(all_games)
+        new_text_dataset.save(new_text_dataset_path)
+
+
+
 
 
     def parse_memory_dataset(self, move_files):

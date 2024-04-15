@@ -38,7 +38,9 @@ use_critic_warmup = False
 pickup_epoch = 0
 
 run_dir = 0
-run_dir_itr = 0
+run_dir_itr = 2
+
+top_k = None
 
 
 class SelfPlayTask(AbstractTask):
@@ -63,7 +65,7 @@ class SelfPlayTask(AbstractTask):
         self.mini_batch_size = global_mini_batch_size
         self.nfe = 0
         self.epochs = epochs
-        self.max_steps_per_game = config.seq_length - 1 # 30 | 60
+        self.max_steps_per_game = config.seq_length - 1  # 30 | 60
 
         # PPO alg parameters
         self.gamma = 0.99
@@ -88,8 +90,8 @@ class SelfPlayTask(AbstractTask):
 
         # Stockfish Engine
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
-        self.engine.configure({'Threads': 12, "Hash": 1024})
-        self.nodes = 100000
+        self.engine.configure({'Threads': 24, "Hash": 1024})
+        self.nodes = 200000
         self.lines = 1
 
 
@@ -176,9 +178,12 @@ class SelfPlayTask(AbstractTask):
 
 
     def fast_mini_batch(self):
+        total_eval_time = 0
+
         all_total_rewards = []
         all_actions = [[] for _ in range(self.mini_batch_size)]
         all_rewards = [[] for _ in range(self.mini_batch_size)]
+        all_rewards_post = [[] for _ in range(self.mini_batch_size)]
         all_logprobs = [[] for _ in range(self.mini_batch_size)]
         games = [[] for x in range(self.mini_batch_size)]
         epoch_games = []
@@ -192,23 +197,27 @@ class SelfPlayTask(AbstractTask):
         # -------------------------------------
         # Sample Actor
         # -------------------------------------
+        curr_time = time.time()
 
         for t in range(self.max_steps_per_game):
-            # topk_action_log_prob, topk_action, topk_action_probs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
-            # topk_action_log_prob, topk_action = topk_action_log_prob.numpy().tolist(), topk_action.numpy().tolist()
-            # action_log_prob, action = [], []
-            # for idx in range(self.mini_batch_size):
-            #     # Get top actions for batch element
-            #     # print('Top Actions:', topk_action[idx], id_seq_to_uci(topk_action[idx]))
-            #     sample_action, sample_action_prob = self.sample_actions(boards[idx], topk_action[idx], topk_action_log_prob[idx])
-            #     action.append(sample_action)
-            #     action_log_prob.append(sample_action_prob)
 
 
-            action_log_prob, action, all_action_probs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
+            # Sample the actor
+            if top_k is None:
+                action_log_prob, action, all_action_probs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
+            else:
+                topk_action_log_prob, topk_action, topk_action_probs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
+                topk_action_log_prob, topk_action = topk_action_log_prob.numpy().tolist(), topk_action.numpy().tolist()
+                action_log_prob, action = [], []
+                for idx in range(self.mini_batch_size):
+                    # Get top actions for batch element
+                    # print('Top Actions:', topk_action[idx], id_seq_to_uci(topk_action[idx]))
+                    sample_action, sample_action_prob = self.sample_actions(boards[idx], topk_action[idx], topk_action_log_prob[idx])
+                    action.append(sample_action)
+                    action_log_prob.append(sample_action_prob)
 
 
-
+            # Update the game state
             observation_new = deepcopy(observation)
             for idx, act in enumerate(action):
                 if ended_games[idx] is True:
@@ -225,8 +234,8 @@ class SelfPlayTask(AbstractTask):
                     observation_new[idx].append(m_action)
                     action_mask[idx].append(1)
                     if idx == 0:
+                        # print(config.id2token[m_action], round(math.exp(action_log_prob[idx]), 3), end=' ')
                         print(config.id2token[m_action], end=' ')
-
             # Determine reward for each batch element
             if len(games[0]) == self.max_steps_per_game:
                 done = True
@@ -234,11 +243,13 @@ class SelfPlayTask(AbstractTask):
                     if ended_games[idx] is False:
 
                         # Evaluate latest move
+                        e_time = time.time()
                         reward, game_ended, new_eval = self.calc_reward(
                             game,
                             game_evals[idx],
                             boards[idx]
                         )
+                        total_eval_time += time.time() - e_time
                         all_rewards[idx].append(reward)
                         if game_ended is False:
                             game_evals[idx] = new_eval
@@ -254,11 +265,13 @@ class SelfPlayTask(AbstractTask):
                 for idx, game in enumerate(games):
                     if ended_games[idx] is False:
                         # Evaluate latest move
+                        e_time = time.time()
                         reward, game_ended, new_eval = self.calc_reward(
                             game,
                             game_evals[idx],
                             boards[idx]
                         )
+                        total_eval_time += time.time() - e_time
                         if game_ended is False:
                             game_evals[idx] = new_eval
                         if game_ended != ended_games[idx]:
@@ -279,16 +292,45 @@ class SelfPlayTask(AbstractTask):
                 observation = observation_new
 
 
+
+
+
+
         for trajectory in observation:
-            if len(trajectory) < config.seq_length:
+            if len(trajectory) < config.seq_length - 1:
                 trajectory += [0] * ((config.seq_length-1) - len(trajectory))
+            trajectory = trajectory[:config.seq_length - 1]
+
         for trajectory in action_mask:
-            if len(trajectory) < config.seq_length:
+            if len(trajectory) < config.seq_length - 1:
                 trajectory += [0] * ((config.seq_length-1) - len(trajectory))
 
         for trajectory in critic_observation_buffer:
             if len(trajectory) < config.seq_length:
                 trajectory += [0] * (config.seq_length - len(trajectory))
+
+
+        sample_time = time.time() - curr_time
+        gen_time = sample_time - total_eval_time
+        print('\nGen time:', gen_time, 'Eval time:', total_eval_time)
+
+
+        # # Determine rewards post trajectory generation
+        # for idx, game in enumerate(games):
+        #     if ended_games[idx] is False:
+        #         reward, game_ended, new_eval = self.calc_reward(
+        #             game,
+        #             game_evals[idx],
+        #             boards[idx]
+        #         )
+        #         all_rewards_post[idx].append(reward)
+        #         if game_ended is False:
+        #             game_evals[idx] = new_eval
+        #         if game_ended != ended_games[idx]:
+        #             epoch_games.append(' '.join([config.id2token[x] for x in game]))
+        #         ended_games[idx] = game_ended
+        #     else:
+        #         all_rewards_post[idx].append(0)
 
 
 
@@ -344,6 +386,8 @@ class SelfPlayTask(AbstractTask):
         # -------------------------------------
         # Train Actor
         # -------------------------------------
+        observation_tensor = observation_tensor[:, :config.seq_length-1]
+        # print('SHAPES:', observation_tensor.shape, action_tensor.shape, logprob_tensor.shape, advantage_tensor.shape, action_mask_tensor.shape)
 
         curr_time = time.time()
         policy_update_itr = 0
@@ -360,6 +404,8 @@ class SelfPlayTask(AbstractTask):
                 # Early Stopping
                 break
 
+        # print('Actor time:', time.time() - curr_time, 'seconds')
+
         # -------------------------------------
         # Train Critic
         # -------------------------------------
@@ -370,6 +416,8 @@ class SelfPlayTask(AbstractTask):
                 critic_observation_tensor,
                 return_tensor,
             )
+
+        # print('Critic time:', time.time() - curr_time, 'seconds')
 
         # Update results tracker
         epoch_info = {
@@ -400,9 +448,9 @@ class SelfPlayTask(AbstractTask):
         if last_move not in config.end_of_game_tokens and last_move not in config.special_tokens:
             move = chess.Move.from_uci(last_move)
             if move not in board.legal_moves:
-                return -1, True, prev_eval
+                return -1, True, prev_eval  # Illegal UCI
         else:
-            return -1, True, prev_eval
+            return -1, True, prev_eval  # Illegal special token move
 
         # 2. Check if checkmating move
         board.push(move)
@@ -423,12 +471,36 @@ class SelfPlayTask(AbstractTask):
             new_eval = new_eval / 100.0  # Convert centipawns to pawns
         # print('New eval:', new_eval)
 
-        eval_norm = 10.0
-        reward = abs(new_eval - prev_eval) / eval_norm
-        if white_turn and new_eval < prev_eval:
-            reward *= -1
-        elif not white_turn and new_eval > prev_eval:
-            reward *= -1
+        eval_norm = 20.0
+        # reward = abs(new_eval - prev_eval) / eval_norm
+        # reward = 1 - reward
+
+        reward_center = 0.1
+        reward_diff = abs(new_eval - prev_eval) / eval_norm
+        if white_turn is True:
+            if prev_eval > new_eval:  # Position worsened for white
+                reward = reward_center - reward_diff
+            else:
+                reward = reward_center + reward_diff  # Position improved for white
+        else:
+            if prev_eval < new_eval:  # Position worsened for black
+                reward = reward_center - reward_diff
+            else:
+                reward = reward_center + reward_diff  # Position improved for black
+
+        # if white_turn is True:
+        #     reward = new_eval
+        # else:
+        #     reward = -new_eval
+
+
+
+
+
+        # if white_turn and new_eval < prev_eval:
+        #     reward *= -1
+        # elif not white_turn and new_eval > prev_eval:
+        #     reward *= -1
 
         # print('Move:', last_move, 'Prev eval:', prev_eval, 'New eval:', new_eval, 'Reward:', reward)
 
@@ -452,7 +524,10 @@ class SelfPlayTask(AbstractTask):
         observation_input = deepcopy(observation)
         observation_input = tf.convert_to_tensor(observation_input, dtype=tf.int32)
         inf_idx = tf.convert_to_tensor(inf_idx, dtype=tf.int32)
-        return self._sample_actor(observation_input, inf_idx)
+        if top_k is not None:
+            return self._sample_actor_top_k(observation_input, inf_idx)
+        else:
+            return self._sample_actor(observation_input, inf_idx)
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
@@ -462,14 +537,6 @@ class SelfPlayTask(AbstractTask):
         # print('sampling actor', inf_idx)
         pred_probs = self.c_actor(observation_input)
         pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
-
-        # Get top k moves
-        # k = 5
-        # pred_probs_inf = pred_probs[:, inf_idx, :]  # shape (batch, vocab_size)
-        # top_probs, top_indices = tf.math.top_k(pred_probs_inf, k=k) # shape (batch, k), shape (batch, k)
-        # top_probs_log = tf.math.log(top_probs + 1e-10)
-        # return top_probs_log, top_indices, pred_probs
-
 
         # Batch sampling
         all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
@@ -482,6 +549,24 @@ class SelfPlayTask(AbstractTask):
         actions = next_bit_ids  # (batch,)
         actions_log_prob = next_bit_probs  # (batch,)
         return actions_log_prob, actions, all_token_probs
+
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(), dtype=tf.int32)
+    ])
+    def _sample_actor_top_k(self, observation_input, inf_idx):
+        # print('sampling actor', inf_idx)
+        pred_probs = self.c_actor(observation_input)
+        pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
+
+        # Get top k moves
+        k = 5
+        if top_k is not None:
+            k = top_k
+        pred_probs_inf = pred_probs[:, inf_idx, :]  # shape (batch, vocab_size)
+        top_probs, top_indices = tf.math.top_k(pred_probs_inf, k=k) # shape (batch, k), shape (batch, k)
+        top_probs_log = tf.math.log(top_probs + 1e-10)
+        return top_probs_log, top_indices, pred_probs
 
     def sample_critic(self, observation):
         for trajectory in observation:
@@ -518,6 +603,7 @@ class SelfPlayTask(AbstractTask):
             advantage_buffer,
             action_mask_tensor
     ):
+
         with tf.GradientTape() as tape:
             pred_probs = self.c_actor(observation_buffer)  # shape: (batch, seq_len, 2)
             pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
