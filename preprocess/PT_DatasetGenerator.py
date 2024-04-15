@@ -10,7 +10,8 @@ import warnings
 
 import threading
 import multiprocessing
-multiprocessing.set_start_method('fork')
+# multiprocessing.set_start_method('fork')
+multiprocessing.set_start_method('spawn', force=True)
 import time
 import sys
 import math
@@ -111,8 +112,32 @@ class PT_DatasetGenerator:
 
 
 
-    def parse_mate_dataset(self, move_files):
-        full_dataset = tf.data.TextLineDataset(move_files)
+    def aggregate_mate_dataset(self):
+        # get all directories that start with 'mate_dataset'
+        dataset_files = []
+        for file in os.listdir(self.dataset_dir):
+            if file.startswith('mate_dataset'):
+                full_path = os.path.join(self.dataset_dir, file)
+                dataset_files.append(full_path)
+        datasets = []
+        for dataset_file in dataset_files:
+            dataset = tf.data.Dataset.load(dataset_file)
+            datasets.append(dataset)
+
+        # Combine datasets
+        combined_dataset = datasets[0]
+        for dataset in datasets[1:]:
+            combined_dataset = combined_dataset.concatenate(dataset)
+
+        # Process as normal dataset
+        combined_dataset = combined_dataset.batch(config.global_batch_size)
+        combined_dataset = combined_dataset.map(language_modeling.preprocess_decoder_batch, num_parallel_calls=tf.data.AUTOTUNE)
+        combined_dataset = combined_dataset.prefetch(tf.data.AUTOTUNE)
+
+
+
+
+
 
 
 
@@ -124,33 +149,33 @@ class PT_DatasetGenerator:
     @staticmethod
     def parse_mate_dataset_piece(file_list, dataset_dir):
 
-        file_list.append(dataset_dir)
-        file_list.append(0)
-        PT_DatasetGenerator.parse_mate_dataset_piece_proc(file_list)
-        #
-        # num_processes = 12
-        # k = len(file_list) // num_processes
-        # file_batches = [file_list[i * k:(i + 1) * k] for i in range(num_processes)]
-        # # print('File batches:', len(file_batches), 'files per batch:', k)
-        # # for idx, batch in enumerate(file_batches):
-        # #     print('Batch:', idx, 'Files:', batch)
-        # # exit(0)
-        #
-        # # If the division isn't perfect, handle the remainder
-        # remainder = len(file_list) % num_processes
-        # for i in range(remainder):
-        #     file_batches[i].append(file_list[-(i + 1)])
-        #
+        # file_list.append(dataset_dir)
+        # file_list.append(0)
+        # PT_DatasetGenerator.parse_mate_dataset_piece_proc(file_list)
+
+        num_processes = 12
+        k = len(file_list) // num_processes
+        file_batches = [file_list[i * k:(i + 1) * k] for i in range(num_processes)]
+        # print('File batches:', len(file_batches), 'files per batch:', k)
         # for idx, batch in enumerate(file_batches):
-        #     batch.append(dataset_dir)
-        #     batch.append(idx)
-        #
-        # # Process in parallel
-        # # with concurrent.futures.ProcessPoolExecutor(max_workers=num_processes) as executor:
-        # #     results = list(executor.map(PT_DatasetGenerator.parse_mate_dataset_piece_proc, file_batches))
-        #
-        # with multiprocessing.Pool(1) as pool:
-        #     pool.map(PT_DatasetGenerator.parse_mate_dataset_piece_proc, file_batches)
+        #     print('Batch:', idx, 'Files:', batch)
+        # exit(0)
+
+        # If the division isn't perfect, handle the remainder
+        remainder = len(file_list) % num_processes
+        for i in range(remainder):
+            file_batches[i].append(file_list[-(i + 1)])
+
+        for idx, batch in enumerate(file_batches):
+            batch.append(dataset_dir)
+            batch.append(idx)
+
+        # Process in parallel
+        # with concurrent.futures.ProcessPoolExecutor(max_workers=num_processes) as executor:
+        #     results = list(executor.map(PT_DatasetGenerator.parse_mate_dataset_piece_proc, file_batches))
+
+        with multiprocessing.Pool(12) as pool:
+            pool.map(PT_DatasetGenerator.parse_mate_dataset_piece_proc, file_batches)
 
     @staticmethod
     def parse_mate_dataset_piece_proc(text_dataset):
@@ -158,7 +183,7 @@ class PT_DatasetGenerator:
         file_idx = text_dataset.pop()
         dataset_dir = text_dataset.pop()
         text_dataset = tf.data.TextLineDataset(text_dataset)
-        # text_dataset = text_dataset.take(100)
+        # text_dataset = text_dataset.take(1000)
         # return text_dataset
         parsed_games = []
 
