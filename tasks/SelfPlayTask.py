@@ -5,6 +5,7 @@ from copy import deepcopy
 import matplotlib.gridspec as gridspec
 import random
 import math
+import chess.pgn
 import json
 import config
 import matplotlib.pyplot as plt
@@ -37,10 +38,16 @@ use_critic_warmup = False
 
 pickup_epoch = 0
 
-run_dir = 0
-run_dir_itr = 2
+run_dir = 3
+run_dir_itr = 0
 
 top_k = None
+
+# set seeds
+seed = 1
+random.seed(seed)
+tf.random.set_seed(seed)
+np.random.seed(seed)
 
 
 class SelfPlayTask(AbstractTask):
@@ -95,14 +102,12 @@ class SelfPlayTask(AbstractTask):
         self.lines = 1
 
 
-
-
     def build(self):
 
         # Optimizer parameters
         self.actor_learning_rate = 0.0001  # 0.0001
-        self.critic_learning_rate = 0.0005  # 0.0001
-        self.train_actor_iterations = 250  # was 250
+        self.critic_learning_rate = 0.0001  # 0.0001
+        self.train_actor_iterations = 100  # was 250
         self.train_critic_iterations = 40  # was 40
         self.beta_1 = 0.9
         if self.run_val is False:
@@ -114,7 +119,7 @@ class SelfPlayTask(AbstractTask):
                 1000,  # decay_steps
                 alpha=1.0,
                 warmup_target=self.actor_learning_rate,
-                warmup_steps=500
+                warmup_steps=1000
             )
 
         # Optimizers
@@ -123,9 +128,8 @@ class SelfPlayTask(AbstractTask):
             # self.actor_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.actor_learning_rate, beta_1=self.beta_1)
             self.actor_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.actor_learning_rate)
         if self.critic_optimizer is None:
-            self.critic_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.critic_learning_rate)
-            # self.critic_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.critic_learning_rate, beta_1=self.beta_1)
-            # self.critic_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.critic_learning_rate)
+            # self.critic_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.critic_learning_rate)
+            self.critic_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.critic_learning_rate)
 
         self.c_actor, self.c_critic = get_model(self.actor_load_path, self.critic_load_path)
 
@@ -233,9 +237,9 @@ class SelfPlayTask(AbstractTask):
                     games[idx].append(m_action)
                     observation_new[idx].append(m_action)
                     action_mask[idx].append(1)
-                    if idx == 0:
-                        # print(config.id2token[m_action], round(math.exp(action_log_prob[idx]), 3), end=' ')
-                        print(config.id2token[m_action], end=' ')
+                    # if idx == 0:
+                    #     # print(config.id2token[m_action], round(math.exp(action_log_prob[idx]), 3), end=' ')
+                    #     print(config.id2token[m_action], end=' ')
             # Determine reward for each batch element
             if len(games[0]) == self.max_steps_per_game:
                 done = True
@@ -249,6 +253,7 @@ class SelfPlayTask(AbstractTask):
                             game_evals[idx],
                             boards[idx]
                         )
+
                         total_eval_time += time.time() - e_time
                         all_rewards[idx].append(reward)
                         if game_ended is False:
@@ -264,6 +269,7 @@ class SelfPlayTask(AbstractTask):
                 done = False
                 for idx, game in enumerate(games):
                     if ended_games[idx] is False:
+
                         # Evaluate latest move
                         e_time = time.time()
                         reward, game_ended, new_eval = self.calc_reward(
@@ -292,8 +298,14 @@ class SelfPlayTask(AbstractTask):
                 observation = observation_new
 
 
-
-
+        # Count the number of checkmates
+        num_checkmates = 0
+        for idx, board in enumerate(boards):
+            if board.is_checkmate() is True:
+                # checkmating_moves = [config.id2token[x] for x in games[idx]]
+                # print('Checkmating moves:', ' '.join(checkmating_moves))
+                # print('Rewards:', all_rewards[idx])
+                num_checkmates += 1
 
 
         for trajectory in observation:
@@ -315,26 +327,7 @@ class SelfPlayTask(AbstractTask):
         print('\nGen time:', gen_time, 'Eval time:', total_eval_time)
 
 
-        # # Determine rewards post trajectory generation
-        # for idx, game in enumerate(games):
-        #     if ended_games[idx] is False:
-        #         reward, game_ended, new_eval = self.calc_reward(
-        #             game,
-        #             game_evals[idx],
-        #             boards[idx]
-        #         )
-        #         all_rewards_post[idx].append(reward)
-        #         if game_ended is False:
-        #             game_evals[idx] = new_eval
-        #         if game_ended != ended_games[idx]:
-        #             epoch_games.append(' '.join([config.id2token[x] for x in game]))
-        #         ended_games[idx] = game_ended
-        #     else:
-        #         all_rewards_post[idx].append(0)
-
-
-
-        print('')
+        self.save_game_pgn(games[0])
         # -------------------------------------
         # Sample Critic
         # -------------------------------------
@@ -404,7 +397,7 @@ class SelfPlayTask(AbstractTask):
                 # Early Stopping
                 break
 
-        # print('Actor time:', time.time() - curr_time, 'seconds')
+        print('Actor time:', time.time() - curr_time, 'seconds')
 
         # -------------------------------------
         # Train Critic
@@ -417,7 +410,7 @@ class SelfPlayTask(AbstractTask):
                 return_tensor,
             )
 
-        # print('Critic time:', time.time() - curr_time, 'seconds')
+        print('Critic time:', time.time() - curr_time, 'seconds')
 
         # Update results tracker
         epoch_info = {
@@ -427,13 +420,44 @@ class SelfPlayTask(AbstractTask):
             'p_iter': policy_update_itr,
             'entropy': entr.numpy(),
             'kl': kl.numpy(),
+            'checkmates': num_checkmates,
         }
+
+
 
         # print('GAME:', epoch_games[0])
 
         return epoch_info
 
 
+    def save_game_pgn(self, game_moves):
+        uci_moves = [config.id2token[x] for x in game_moves]
+        uci_moves_clipped = [x for x in uci_moves if x not in config.end_of_game_tokens and x not in config.special_tokens and x is not '']
+
+        game = chess.pgn.Game()
+        node = game
+        board = chess.Board()
+        for idx, move in enumerate(uci_moves_clipped):
+            # print('GAME MOVE:', move)
+            move = chess.Move.from_uci(move)
+            if move in board.legal_moves:
+                board.push(move)
+                node = node.add_variation(move)
+            else:
+                break
+
+        game.headers["Event"] = "Example Game"
+        game.headers["Site"] = "Internet"
+        game.headers["Date"] = "2024.04.13"
+        game.headers["Round"] = "1"
+        game.headers["White"] = "Player1"
+        game.headers["Black"] = "Player2"
+        game.headers["Result"] = "*"  # Or use board.result() if the game is over
+
+        pgn_path = os.path.join(self.run_dir, 'game.pgn')
+        with open(pgn_path, "w") as pgn_file:
+            exporter = chess.pgn.FileExporter(pgn_file)
+            game.accept(exporter)
 
     # This is only to be called if the game has not finished
     # All position evals are from the perspective of the white player
@@ -444,6 +468,26 @@ class SelfPlayTask(AbstractTask):
         # 0. Determine the turn color
         white_turn = (board.turn == chess.WHITE)
 
+        # check if it is checkmate
+        if board.is_checkmate():
+            # this means the current player is checkmated. win for other side
+            if white_turn is True:
+                winning_token = '[black]'
+            else:
+                winning_token = '[white]'
+            # print('\nCheckmate prediction token:', last_move, 'Winning token:', winning_token)
+            # print('Move sequence string:', ' '.join(uci_moves))
+            if last_move == winning_token:
+                return 1.0, True, prev_eval
+            else:
+                return -1.0, True, prev_eval
+        elif board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves() or board.is_fivefold_repetition():
+            if last_move == '[draw]':
+                return 1.0, True, prev_eval
+            else:
+                return -1.0, True, prev_eval
+
+
         # 1. Check if a legal move has been made
         if last_move not in config.end_of_game_tokens and last_move not in config.special_tokens:
             move = chess.Move.from_uci(last_move)
@@ -452,29 +496,49 @@ class SelfPlayTask(AbstractTask):
         else:
             return -1, True, prev_eval  # Illegal special token move
 
-        # 2. Check if checkmating move
+
+        # -------------------------------------
+        # Push move
+        # -------------------------------------
         board.push(move)
+
+        # 2. Check if checkmate
         if board.is_checkmate():
-            return 1, True, prev_eval
+            # print('\nCheckmate played\n')
+            return 1.0, False, prev_eval
 
         # 3. Check if draw
         if board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves() or board.is_fivefold_repetition():
-            return -0.1, True, prev_eval
-
+            return -0.1, False, prev_eval
 
         # 4. Calculate reward for non-checkmating legal move
         analysis = self.engine.analyse(board, chess.engine.Limit(nodes=self.nodes), multipv=self.lines)
-        new_eval = self.parse_analysis(analysis)
-        if new_eval is None:
-            new_eval = prev_eval
-        else:
-            new_eval = new_eval / 100.0  # Convert centipawns to pawns
-        # print('New eval:', new_eval)
+        top_line = analysis[0]
+        top_line_score = top_line["score"]
+        top_move = top_line["pv"][0].uci()
 
+        # 5. Determine if forced mating sequence
+        if top_line_score.is_mate():
+            if white_turn is True:
+                moves_to_mate = top_line_score.white().mate()
+            else:
+                moves_to_mate = top_line_score.black().mate()
+            if abs(moves_to_mate) > 5:
+                if moves_to_mate < 0:
+                    moves_to_mate = -5
+                else:
+                    moves_to_mate = 5
+            moves_to_mate = moves_to_mate / 10.0
+            if moves_to_mate > 0:
+                reward = 0.5 - moves_to_mate
+                return reward, False, prev_eval
+            else:
+                reward = -0.5 - moves_to_mate
+                return reward, False, prev_eval
+
+        # 6. Normal move without forced mate
+        new_eval = top_line_score.white().score() / 100.0  # Convert centipawns to pawns
         eval_norm = 20.0
-        # reward = abs(new_eval - prev_eval) / eval_norm
-        # reward = 1 - reward
-
         reward_center = 0.1
         reward_diff = abs(new_eval - prev_eval) / eval_norm
         if white_turn is True:
@@ -488,32 +552,9 @@ class SelfPlayTask(AbstractTask):
             else:
                 reward = reward_center + reward_diff  # Position improved for black
 
-        # if white_turn is True:
-        #     reward = new_eval
-        # else:
-        #     reward = -new_eval
-
-
-
-
-
-        # if white_turn and new_eval < prev_eval:
-        #     reward *= -1
-        # elif not white_turn and new_eval > prev_eval:
-        #     reward *= -1
-
-        # print('Move:', last_move, 'Prev eval:', prev_eval, 'New eval:', new_eval, 'Reward:', reward)
-
 
         return reward, False, new_eval
 
-    def parse_analysis(self, analysis):
-        # print('Analysis', analysis)
-        for idx, line in enumerate(analysis):
-            # line_top_move = line["pv"][0].uci()
-            line_top_move_score = line["score"].white().score()
-            return line_top_move_score
-        return 0.0
 
     # -------------------------------------
     # Actor-Critic Functions
@@ -584,9 +625,6 @@ class SelfPlayTask(AbstractTask):
         t_value = self.c_critic.vcall(observation_input)  # (batch, seq_len, 2)
         t_value = t_value[:, :, 0]
         return t_value
-
-
-
 
     @tf.function(input_signature=[
             tf.TensorSpec(shape=(None, None), dtype=tf.float32),

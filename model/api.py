@@ -7,12 +7,15 @@ import chess
 import chess.svg
 from model import get_pretrain_model as get_model
 
+
+
+
 class ChessGPT_API:
 
-    def __init__(self):
-        self.user_plays_white = True
+    def __init__(self, model_path=config.model_path, user_plays_white=True):
+        self.user_plays_white = user_plays_white
 
-        self.model = get_model(config.model_path)
+        self.model = get_model(model_path)
 
         # --> Chess Board
         self.board = chess.Board()

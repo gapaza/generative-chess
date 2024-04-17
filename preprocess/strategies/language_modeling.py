@@ -5,6 +5,35 @@ import chess
 
 
 
+def get_game_piece_encoding_from_str(uci_string):
+    uci_game_moves = uci_string.split(' ')
+    game = chess.Board()
+    # 0 is padding token (every position that isn't a valid uci move)
+
+    game_piece_types = []
+    for move_uci in uci_game_moves:
+        try:
+            if move_uci in ['', '[start]'] or move_uci in config.end_of_game_tokens or move_uci in config.special_tokens:
+                game_piece_types.append(0)
+                continue
+            move = chess.Move.from_uci(move_uci)
+            piece = game.piece_at(move.from_square)
+            if piece is not None:
+                piece_type = piece.piece_type
+            else:
+                piece_type = 0
+
+            game_piece_types.append(piece_type)
+            game.push(move)  # Make the move on the board to update the board state
+        except:
+            game_piece_types.append(0)
+
+    # No need for padding  in this function
+    game_piece_types = ' '.join([str(piece_type) for piece_type in game_piece_types])
+    return game_piece_types
+
+
+
 
 def get_game_piece_encoding(text_tensor):
     uci_game = text_tensor.numpy().decode('utf-8')
