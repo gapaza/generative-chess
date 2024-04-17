@@ -18,7 +18,6 @@ else:
 # Distributed Training
 distributed = False
 mirrored_strategy = tf.distribute.MirroredStrategy()
-global_batch_size = 256  # 64, 128, 256, 512, 1024
 
 
 
@@ -76,8 +75,9 @@ num_experts = 8
 dropout = 0.1
 
 # --> Training
-pt_dataset = os.path.join(datasets_dir, 'combined-dataset')
+pt_dataset = os.path.join(datasets_dir, 'combined-dataset-128b')
 epochs = 200
+global_batch_size = 128  # 64, 128, 256, 512, 1024
 
 
 

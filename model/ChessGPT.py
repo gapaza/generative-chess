@@ -35,11 +35,11 @@ class ChessGPT(tf.keras.Model):
             config.embed_dim,
             mask_zero=True
         )
-        self.piece_embedding = keras.layers.Embedding(
-            7,  # pawn, knight, bishop, rook, queen, king
-            config.embed_dim,
-            mask_zero=True
-        )
+        # self.piece_embedding = keras.layers.Embedding(
+        #     7,  # pawn, knight, bishop, rook, queen, king
+        #     config.embed_dim,
+        #     mask_zero=True
+        # )
         self.positional_embedding = RotaryEmbedding()
 
         # Decoder Stack
