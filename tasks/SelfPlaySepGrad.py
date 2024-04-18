@@ -3,11 +3,6 @@ import time
 import tensorflow as tf
 from copy import deepcopy
 import matplotlib.gridspec as gridspec
-from concurrent.futures import ProcessPoolExecutor
-#set multiprocessing type to fork
-import multiprocessing as mp
-mp.set_start_method('fork')
-
 import random
 import math
 import chess.pgn
@@ -24,7 +19,7 @@ from collections import OrderedDict
 import tensorflow_addons as tfa
 import chess
 import chess.engine
-from stockfish.rewards.reward_1 import calc_reward, calc_reward_batch
+
 
 def discounted_cumulative_sums(x, discount):
     # Discounted cumulative sums of vectors for computing rewards-to-go and advantage estimates
@@ -36,17 +31,16 @@ def id_seq_to_uci(seq):
 
 
 # Number of self-play games in a mini-batch
-global_mini_batch_size = 32
+global_mini_batch_size = 8
 
 
 use_actor_warmup = True
-critic_warmup_epochs = 0
+use_critic_warmup = False
 
-
-pickup_epoch = 150
+pickup_epoch = 0
 
 run_dir = 4
-run_dir_itr = 4
+run_dir_itr = 0
 
 top_k = None
 
@@ -57,7 +51,7 @@ tf.random.set_seed(seed)
 np.random.seed(seed)
 
 
-class SelfPlayTask(AbstractTask):
+class SelfPlaySepGrad(AbstractTask):
 
     def __init__(
             self,
@@ -70,7 +64,7 @@ class SelfPlayTask(AbstractTask):
             run_val=False,
             val_itr=0,
     ):
-        super(SelfPlayTask, self).__init__(run_num, None, problem, epochs, actor_load_path, critic_load_path)
+        super(SelfPlaySepGrad, self).__init__(run_num, None, problem, epochs, actor_load_path, critic_load_path)
         self.debug = debug
         self.run_val = run_val
         self.val_itr = val_itr
@@ -85,7 +79,7 @@ class SelfPlayTask(AbstractTask):
         self.gamma = 0.99
         self.lam = 0.95
         self.clip_ratio = 0.2
-        self.target_kl = 0.0001  # was 0.01
+        self.target_kl = 0.001  # was 0.01
         self.entropy_coef = 0.00  # was 0.02 originally
         self.counter = 0
         self.game_start_token_id = config.start_token_id
@@ -112,9 +106,9 @@ class SelfPlayTask(AbstractTask):
     def build(self):
 
         # Optimizer parameters
-        self.actor_learning_rate = 0.00001  # 0.0001
+        self.actor_learning_rate = 0.0001  # 0.0001
         self.critic_learning_rate = 0.0001  # 0.0001
-        self.train_actor_iterations = 10  # was 250
+        self.train_actor_iterations = 100  # was 250
         self.train_critic_iterations = 40  # was 40
         self.beta_1 = 0.9
         if self.run_val is False:
@@ -128,13 +122,6 @@ class SelfPlayTask(AbstractTask):
                 warmup_target=self.actor_learning_rate,
                 warmup_steps=1000
             )
-        self.critic_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-            0.0,  # initial learning rate
-            1000,  # decay_steps
-            alpha=1.0,
-            warmup_target=self.critic_learning_rate,
-            warmup_steps=1000
-        )
 
         # Optimizers
         if self.actor_optimizer is None:
@@ -194,12 +181,25 @@ class SelfPlayTask(AbstractTask):
             action_idx = np.random.choice(filtered_tokens_idx, p=filtered_action_probs)
             return actions[action_idx], actions_log_prob[action_idx]
 
+    def get_even_mask(self, items):
+        mask = [x for x in range(len(items))]
+        mask = [x % 2 for x in mask]
+        return mask
+
+    def get_odd_mask(self, items):
+        mask = [x for x in range(len(items))]
+        mask = [x % 2 for x in mask]
+        mask = [1 - x for x in mask]
+        return mask
+
+
 
     def fast_mini_batch(self):
         total_eval_time = 0
 
         all_total_rewards = []
         all_actions = [[] for _ in range(self.mini_batch_size)]
+        all_rewards = [[] for _ in range(self.mini_batch_size)]
         all_rewards_post = [[] for _ in range(self.mini_batch_size)]
         all_logprobs = [[] for _ in range(self.mini_batch_size)]
         games = [[] for x in range(self.mini_batch_size)]
@@ -253,36 +253,52 @@ class SelfPlayTask(AbstractTask):
                     # if idx == 0:
                     #     # print(config.id2token[m_action], round(math.exp(action_log_prob[idx]), 3), end=' ')
                     #     print(config.id2token[m_action], end=' ')
-
             # Determine reward for each batch element
             if len(games[0]) == self.max_steps_per_game:
                 done = True
                 for idx, game in enumerate(games):
                     if ended_games[idx] is False:
+
+                        # Evaluate latest move
+                        e_time = time.time()
                         reward, game_ended, new_eval = self.calc_reward(
                             game,
                             game_evals[idx],
                             boards[idx]
                         )
+
+                        total_eval_time += time.time() - e_time
+                        all_rewards[idx].append(reward)
                         if game_ended is False:
                             game_evals[idx] = new_eval
+
                         if game_ended != ended_games[idx]:
                             epoch_games.append(' '.join([config.id2token[x] for x in game]))
+
                         ended_games[idx] = game_ended
+                    else:
+                        all_rewards[idx].append(0)
             else:
                 done = False
                 for idx, game in enumerate(games):
                     if ended_games[idx] is False:
+
+                        # Evaluate latest move
+                        e_time = time.time()
                         reward, game_ended, new_eval = self.calc_reward(
                             game,
                             game_evals[idx],
                             boards[idx]
                         )
+                        total_eval_time += time.time() - e_time
                         if game_ended is False:
                             game_evals[idx] = new_eval
                         if game_ended != ended_games[idx]:
                             epoch_games.append(' '.join([config.id2token[x] for x in game]))
                         ended_games[idx] = game_ended
+                        all_rewards[idx].append(reward)
+                    else:
+                        all_rewards[idx].append(0)
 
             if all(ended_games):
                 done = True
@@ -319,40 +335,34 @@ class SelfPlayTask(AbstractTask):
                 trajectory += [0] * (config.seq_length - len(trajectory))
 
 
-
-        # -------------------------------------
-        # Post process rewards
-        # -------------------------------------
-        curr_time_2 = time.time()
-
-        # Batch games
-        # batch_size = 8
-        # batches = [games[i:i + batch_size] for i in range(0, len(games), batch_size)]
-        # print('STARTING BATCHES:', len(batches))
-        # with ProcessPoolExecutor(max_workers=4) as executor:
-        #     batch_results = list(executor.map(calc_reward_batch, batches))
-        # all_rewards_post = []
-        # for result in batch_results:
-        #     all_rewards_post += result
-
-
-        for idx, game in enumerate(games):
-            uci_game = ' '.join([config.id2token[x] for x in game])
-            reward = calc_reward(self.engine, uci_game)
-            all_rewards_post[idx] = reward
-
-
-        batch_total_eval_time = time.time() - curr_time_2
         sample_time = time.time() - curr_time
-        print('\nGen time:', sample_time, 'Eval time:', batch_total_eval_time)
+        gen_time = sample_time - total_eval_time
+        print('\nGen time:', gen_time, 'Eval time:', total_eval_time)
 
+        # -------------------------------------
+        # Split White and Black moves
+        # -------------------------------------
+        log_probs_white, log_probs_black = [], []
+        all_white_mask, all_black_mask = [], []
+        for log_probs in all_logprobs:
+            white_mask = self.get_odd_mask(log_probs)  # This masks out black moves
+            black_mask = self.get_even_mask(log_probs)    # This masks out white moves
+            all_white_mask.append(white_mask)
+            all_black_mask.append(black_mask)
+            log_probs_white.append([x * y for x, y in zip(log_probs, white_mask)])
+            log_probs_black.append([x * y for x, y in zip(log_probs, black_mask)])
 
-
-
+        actions_white, actions_black = [], []
+        for idx, action in enumerate(all_actions):
+            white_mask = self.get_odd_mask(action)     # This masks out black moves
+            black_mask = self.get_even_mask(action)    # This masks out white moves
+            actions_white.append([x * y for x, y in zip(action, white_mask)])
+            actions_black.append([x * y for x, y in zip(action, black_mask)])
 
 
 
         self.save_game_pgn(games[0])
+
         # -------------------------------------
         # Sample Critic
         # -------------------------------------
@@ -362,7 +372,7 @@ class SelfPlayTask(AbstractTask):
         value_t = value_t.numpy().tolist()  # (30, 31)
         for idx, value in zip(range(self.mini_batch_size), value_t):
             last_reward = value[-1]
-            all_rewards_post[idx].append(last_reward)
+            all_rewards[idx].append(last_reward)
 
         # -------------------------------------
         # Calculate Advantage and Return
@@ -371,8 +381,8 @@ class SelfPlayTask(AbstractTask):
         proc_time = time.time()
         all_advantages = [[] for _ in range(self.mini_batch_size)]
         all_returns = [[] for _ in range(self.mini_batch_size)]
-        for idx in range(len(all_rewards_post)):
-            rewards = np.array(all_rewards_post[idx])
+        for idx in range(len(all_rewards)):
+            rewards = np.array(all_rewards[idx])
             values = np.array(value_t[idx])
             deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
             adv_tensor = discounted_cumulative_sums(
@@ -409,24 +419,18 @@ class SelfPlayTask(AbstractTask):
 
         curr_time = time.time()
         policy_update_itr = 0
-        kl, entr, policy_loss, actor_loss = 0, 0, 0, 0
-        if self.curr_epoch >= critic_warmup_epochs:
-            for i in range(self.train_actor_iterations):
-                policy_update_itr += 1
-                kl, entr, policy_loss, actor_loss = self.train_actor(
-                    observation_tensor,
-                    action_tensor,
-                    logprob_tensor,
-                    advantage_tensor,
-                    action_mask_tensor
-                )
-                if abs(kl) > 1.5 * self.target_kl:
-                    # Early Stopping
-                    break
-            kl = kl.numpy()
-            entr = entr.numpy()
-            policy_loss = policy_loss.numpy()
-            actor_loss = actor_loss.numpy()
+        for i in range(self.train_actor_iterations):
+            policy_update_itr += 1
+            kl, entr, policy_loss, actor_loss = self.train_actor(
+                observation_tensor,
+                action_tensor,
+                logprob_tensor,
+                advantage_tensor,
+                action_mask_tensor
+            )
+            if abs(kl) > 1.5 * self.target_kl:
+                # Early Stopping
+                break
 
         print('Actor time:', time.time() - curr_time, 'seconds')
 
@@ -445,12 +449,12 @@ class SelfPlayTask(AbstractTask):
 
         # Update results tracker
         epoch_info = {
-            'mb_return': np.mean(all_rewards_post),
+            'mb_return': np.mean(all_rewards),
             'c_loss': value_loss.numpy(),
-            'p_loss': policy_loss,
+            'p_loss': policy_loss.numpy(),
             'p_iter': policy_update_itr,
-            'entropy': entr,
-            'kl': kl,
+            'entropy': entr.numpy(),
+            'kl': kl.numpy(),
             'checkmates': num_checkmates,
         }
 
@@ -542,8 +546,49 @@ class SelfPlayTask(AbstractTask):
         if board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves() or board.is_fivefold_repetition():
             return -0.1, False, prev_eval
 
+        # 4. Calculate reward for non-checkmating legal move
+        analysis = self.engine.analyse(board, chess.engine.Limit(nodes=self.nodes), multipv=self.lines)
+        top_line = analysis[0]
+        top_line_score = top_line["score"]
+        top_move = top_line["pv"][0].uci()
 
-        return 0.0, False, prev_eval
+        # 5. Determine if forced mating sequence
+        if top_line_score.is_mate():
+            if white_turn is True:
+                moves_to_mate = top_line_score.white().mate()
+            else:
+                moves_to_mate = top_line_score.black().mate()
+            if abs(moves_to_mate) > 5:
+                if moves_to_mate < 0:
+                    moves_to_mate = -5
+                else:
+                    moves_to_mate = 5
+            moves_to_mate = moves_to_mate / 10.0
+            if moves_to_mate > 0:
+                reward = 0.5 - moves_to_mate
+                return reward, False, prev_eval
+            else:
+                reward = -0.5 - moves_to_mate
+                return reward, False, prev_eval
+
+        # 6. Normal move without forced mate
+        new_eval = top_line_score.white().score() / 100.0  # Convert centipawns to pawns
+        eval_norm = 20.0
+        reward_center = 0.1
+        reward_diff = abs(new_eval - prev_eval) / eval_norm
+        if white_turn is True:
+            if prev_eval > new_eval:  # Position worsened for white
+                reward = reward_center - reward_diff
+            else:
+                reward = reward_center + reward_diff  # Position improved for white
+        else:
+            if prev_eval < new_eval:  # Position worsened for black
+                reward = reward_center - reward_diff
+            else:
+                reward = reward_center + reward_diff  # Position improved for black
+
+
+        return reward, False, new_eval
 
 
     # -------------------------------------
@@ -786,16 +831,13 @@ class SelfPlayTask(AbstractTask):
 
 
 if __name__ == '__main__':
-    # actor_path = config.model_path
-    # critic_path = config.model_path
-
-    actor_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'actor_weights_150')
-    critic_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'critic_weights_150')
+    actor_path = config.model_path
+    critic_path = config.model_path
 
     # actor_path = None
     # critic_path = None
 
-    task = SelfPlayTask(
+    task = SelfPlaySepGrad(
         run_num=run_dir,
         problem=None,
         epochs=500,
@@ -805,4 +847,5 @@ if __name__ == '__main__':
         run_val=False,
         val_itr=run_dir_itr,
     )
-    task.run()
+    task.get_even_mask([x for x in range(10)])
+    # task.run()

@@ -114,7 +114,7 @@ elif move_language == 'san':
 
 end_of_game_tokens = ["[white]", "[black]", "[draw]"]
 special_tokens = ["[pos]", "[mask]", '[start]']
-
+non_move_tokens = special_tokens + end_of_game_tokens + ['']
 num_special_tokens = len(special_tokens) + 2
 vocab = []
 uci_move_tokens = []

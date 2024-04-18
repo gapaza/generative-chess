@@ -4,7 +4,7 @@ results
 .idea
 __pycache__
 games
-
+stockfish/rewards.png
 stockfish/stockfish
 commands.txt
 
