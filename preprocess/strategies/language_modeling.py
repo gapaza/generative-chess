@@ -5,6 +5,32 @@ import chess
 
 
 
+def preprocess_decoder_batch(moves):
+    encoded_moves = config.encode_tf(moves)
+
+    # Inputs
+    encoded_shape = tf.shape(encoded_moves)
+    batch_size = encoded_shape[0]
+    seq_length = encoded_shape[1]
+    start_token = tf.fill([batch_size, 1], config.start_token_id)
+    encoded_inputs = tf.concat([start_token, encoded_moves], axis=1)
+    encoded_inputs = encoded_inputs[:, :seq_length]
+
+    # Labels
+    encoded_labels = encoded_moves
+
+    # Optionally cast to int16 to save memory
+    encoded_inputs = tf.cast(encoded_inputs, tf.int16)
+    encoded_labels = tf.cast(encoded_labels, tf.int16)
+
+    return encoded_inputs, encoded_labels
+
+
+
+# -------------------------
+# Piece Encoding
+# -------------------------
+
 def get_game_piece_encoding_from_str(uci_string):
     uci_game_moves = uci_string.split(' ')
     game = chess.Board()
@@ -31,9 +57,6 @@ def get_game_piece_encoding_from_str(uci_string):
     # No need for padding  in this function
     game_piece_types = ' '.join([str(piece_type) for piece_type in game_piece_types])
     return game_piece_types
-
-
-
 
 def get_game_piece_encoding(text_tensor):
     uci_game = text_tensor.numpy().decode('utf-8')
@@ -72,33 +95,32 @@ def get_game_piece_encoding(text_tensor):
     return game_piece_types
 
 
+def pad_piece_dataset(piece_vector):
 
-def preprocess_decoder_batch(moves):
-    encoded_moves = config.encode_tf(moves)
+    # Add start token to the beginning of the piece vector
+    pieces_split = tf.strings.split(piece_vector, ' ')
+    pieces_split = tf.strings.to_number(pieces_split, out_type=tf.int32)
+    start_token = tf.fill([1], 0)
+    start_token = tf.cast(start_token, tf.int32)
+    pieces_split = tf.concat([start_token, pieces_split], axis=0)
+    pieces_split = pieces_split[:config.seq_length]
 
-    # Inputs
-    encoded_shape = tf.shape(encoded_moves)
-    batch_size = encoded_shape[0]
-    seq_length = encoded_shape[1]
-    start_token = tf.fill([batch_size, 1], config.start_token_id)
-    encoded_inputs = tf.concat([start_token, encoded_moves], axis=1)
-    encoded_inputs = encoded_inputs[:, :seq_length]
+    # Pad to seq_length
+    seq_len = tf.shape(pieces_split)[0]
+    padding_size = config.seq_length - seq_len
+    paddings = [[0, padding_size]]  # (before1, after1), (before2, after2)
+    padded_tensor = tf.pad(pieces_split, paddings, "CONSTANT")
 
-    # Labels
-    encoded_labels = encoded_moves
-
-    # Optionally cast to int16 to save memory
-    encoded_inputs = tf.cast(encoded_inputs, tf.int16)
-    encoded_labels = tf.cast(encoded_labels, tf.int16)
-
-    return encoded_inputs, encoded_labels
-
+    return padded_tensor
 
 
 def preprocess_decoder_batch_piece(moves, pieces):
-    encoded_moves = config.encode_tf(moves)
 
-    # Inputs
+    # 1. Encode moves
+    encoded_moves = config.encode_tf(moves)
+    print('Encoded Moves', encoded_moves)
+
+    # 2. Create move inputs
     encoded_shape = tf.shape(encoded_moves)
     batch_size = encoded_shape[0]
     seq_length = encoded_shape[1]
@@ -106,7 +128,7 @@ def preprocess_decoder_batch_piece(moves, pieces):
     encoded_inputs = tf.concat([start_token, encoded_moves], axis=1)
     encoded_inputs = encoded_inputs[:, :seq_length]
 
-    # Labels
+    # 3. Create move labels
     encoded_labels = encoded_moves
 
     # Optionally cast to int16 to save memory

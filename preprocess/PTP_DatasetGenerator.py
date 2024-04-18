@@ -23,13 +23,12 @@ from preprocess.strategies import language_modeling
 
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'combined-dataset-piece')
+curr_dataset = os.path.join(config.datasets_dir, 'combined-dataset-piece-32b')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
 
 small_ds = False
-# uci_dir = os.path.join(config.games_dir, 'chesscom')
 uci_dir = os.path.join(config.games_dir, 'combined')
 uci_piece_dir = os.path.join(config.games_dir, 'combined_piece')
 
@@ -38,7 +37,7 @@ uci_piece_dir = os.path.join(config.games_dir, 'combined_piece')
 
 
 
-class PT_DatasetGenerator:
+class PTP_DatasetGenerator:
     def __init__(self, dataset_dir):
 
         # 1. Initialize
@@ -86,80 +85,43 @@ class PT_DatasetGenerator:
 
 
         print("Parsing train dataset...")
-        train_dataset = self.parse_memory_dataset_piece(train_move_files, piece_files)
+        train_dataset = self.parse_memory_dataset_piece(train_move_files, train_piece_files)
         print("Parsing val dataset...")
-        val_dataset = self.parse_memory_dataset_piece(val_move_files, piece_files)
+        val_dataset = self.parse_memory_dataset_piece(val_move_files, val_piece_files)
 
         if save:
             self.save_datasets(train_dataset, val_dataset)
 
         return train_dataset, val_dataset
 
-    def balance_val_files(self, val_files, kill=False):
-        cc_count = 0
-        mil_count = 0
-        for vfile in val_files:
-            print(vfile)
-            if 'cc' in vfile:
-                cc_count += 1
-            elif 'mil' in vfile:
-                mil_count += 1
-        if cc_count < 2 or mil_count < 2:
-            if kill is True:
-                exit(0)
-
-
-
-
-    def parse_memory_dataset(self, move_files):
-        full_dataset = tf.data.TextLineDataset(move_files)
-        full_dataset = full_dataset.batch(config.global_batch_size)
-        full_dataset = full_dataset.map(language_modeling.preprocess_decoder_batch, num_parallel_calls=tf.data.AUTOTUNE)
-        return full_dataset.prefetch(tf.data.AUTOTUNE)
-
-
     def parse_memory_dataset_piece(self, move_files, piece_files):
 
+        # 1. Load datasets
         full_dataset = tf.data.TextLineDataset(move_files)
-
-        # 1. Parse piece vectors
         piece_dataset = tf.data.TextLineDataset(piece_files)
 
+        # Pad piece datasets
+        piece_dataset = piece_dataset.map(language_modeling.pad_piece_dataset, num_parallel_calls=tf.data.AUTOTUNE)
 
-        for pieces, moves in zip(piece_dataset, full_dataset):
-            pieces_split = tf.strings.split(pieces, ' ')
-            pieces_split = tf.strings.to_number(pieces_split, out_type=tf.int32)
-
-            # convert moves from tensor () dtype=string to python string
-            moves = moves.numpy().decode('utf-8')
-            moves_split = moves.split(' ')
-
-
-            # moves_encoded = config.encode_tf(moves)
-
-            # moves_split = tf.strings.to_number(moves_split, out_type=tf.int32)
-            print(pieces)
-            print(pieces_split)
-            print(moves)
-            print(len(moves_split), moves_split)
-            exit(0)
-
-
-
-        # full_dataset = full_dataset.take(100)
-
-        # 1. Parse piece vectors
-        piece_vectors = self.parse_piece_vectors(full_dataset)
-        piece_vectors_dataset = tf.data.Dataset.from_tensor_slices(piece_vectors)
-        # print('Piece vectors:', piece_vectors_dataset)
-
-        # 2. Combine datasets
-        combined_dataset = tf.data.Dataset.zip((full_dataset, piece_vectors_dataset))
-
-        # 3. Preprocess
+        # 2. Batch and preprocess
+        combined_dataset = tf.data.Dataset.zip((full_dataset, piece_dataset))
         combined_dataset = combined_dataset.batch(config.global_batch_size)
         combined_dataset = combined_dataset.map(language_modeling.preprocess_decoder_batch_piece, num_parallel_calls=tf.data.AUTOTUNE)
-        return combined_dataset.prefetch(tf.data.AUTOTUNE)
+
+        # For validating piece vector matches moves vector
+        # for moves, pieces in combined_dataset:
+        #     moves_str = moves.numpy().decode('utf-8')
+        #     moves_split = moves_str.split(' ')
+        #     game_piece_encoding = language_modeling.get_game_piece_encoding(moves)
+        #     print(pieces)
+        #     print(game_piece_encoding)
+        #     print(len(moves_split), moves_split)
+        #     exit(0)
+
+        # Return
+        combined_dataset = combined_dataset.prefetch(tf.data.AUTOTUNE)
+        return combined_dataset
+
 
     def parse_piece_vectors(self, text_dataset):
         num_proc = 12
@@ -224,7 +186,6 @@ class PT_DatasetGenerator:
         return val_dataset
 
 
-
     def get_num_batches(self):
         train_dataset, val_dataset = self.load_datasets()
 
@@ -233,11 +194,6 @@ class PT_DatasetGenerator:
 
         num_samples_val = tf.data.experimental.cardinality(val_dataset).numpy()
         print("Val Num samples: ", num_samples_val)
-
-
-
-        return 0
-
 
     def debug_dataset(self):
         train_dataset, val_dataset = self.load_datasets()
@@ -265,7 +221,7 @@ class PT_DatasetGenerator:
 
 if __name__ == '__main__':
 
-    generator = PT_DatasetGenerator(curr_dataset)
+    generator = PTP_DatasetGenerator(curr_dataset)
     dataset = generator.get_dataset(save=True, small=small_ds)
     # generator.get_num_batches()
     # dataset_train, dataset_val = generator.load_datasets()

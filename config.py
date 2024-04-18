@@ -77,7 +77,7 @@ dropout = 0.1
 # --> Training
 pt_dataset = os.path.join(datasets_dir, 'combined-dataset-128b')
 epochs = 200
-global_batch_size = 128  # 64, 128, 256, 512, 1024
+global_batch_size = 64  # 64, 128, 256, 512, 1024
 
 
 

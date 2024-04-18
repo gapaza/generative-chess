@@ -1,5 +1,6 @@
 import chess
 import chess.pgn
+import tensorflow as tf
 
 
 def create_pgn_from_uci(uci_moves, filename="game.pgn"):
@@ -30,9 +31,36 @@ def create_pgn_from_uci(uci_moves, filename="game.pgn"):
 
     print(game)
 
+def padding_func():
+    # tensor = tf.constant([[1, 2, 3], [4, 5, 6]])
+    # print(tensor)
+    # max_len = 8
+    # seq_len = tf.shape(tensor)[1]
+    # padding_size = int(max_len - seq_len)
+    #
+    # paddings = tf.constant([[0, 0], [0, padding_size]])  # (before1, after1), (before2, after2)
+    #
+    # padded_tensor = tf.pad(tensor, paddings, "CONSTANT")
+    # print(padded_tensor)
+    #
+
+
+    tensor = tf.constant([4, 5, 6])
+    max_len = 8
+    seq_len = tf.shape(tensor)[0]
+    padding_size = int(max_len - seq_len)
+
+    paddings = tf.constant([[0, padding_size]])
+    padded_tensor = tf.pad(tensor, paddings, "CONSTANT", constant_values=0)
+    print(padded_tensor)
+
+
+
 
 
 if __name__ == "__main__":
+    padding_func()
+    exit(0)
 
     # Example UCI move sequence
     uci_moves = """
