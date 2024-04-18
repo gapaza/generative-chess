@@ -65,10 +65,10 @@ stockfish_path = '/home/ec2-user/engines/Stockfish-sf_16.1/src/stockfish'
 
 model_path = os.path.join(weights_dir, 'chess-gpt-v4')
 
-dense_dim = 2048
+dense_dim = 2048  # 2048 nominal
 heads = 8
 seq_length = 128  # 128 nominal
-embed_dim = 512   # 256 nominal
+embed_dim = 512   # 512 nominal
 num_experts = 8
 
 # --> Dropout

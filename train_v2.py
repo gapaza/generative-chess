@@ -27,7 +27,7 @@ def train():
 
     # 1. Build Model
     checkpoint_path = config.model_path
-    model = get_model(checkpoint_path=checkpoint_path)
+    model = get_model(checkpoint_path=None)
 
     # 2. Get Optimizer
     optimizer, jit_compile = get_optimizer()
@@ -74,7 +74,7 @@ def train():
 
 def get_dataset():
 
-    dataset_generator = PT_DatasetGenerator(curr_dataset)
+    dataset_generator = PTP_DatasetGenerator(curr_dataset)
     train_dataset, val_dataset = dataset_generator.load_datasets()
 
     return train_dataset, val_dataset
@@ -82,7 +82,7 @@ def get_dataset():
 
 def get_optimizer():
     jit_compile = False
-    learning_rate = 0.0001
+    learning_rate = 0.001
     learning_rate = tf.keras.optimizers.schedules.CosineDecay(
         0.0,
         100000,

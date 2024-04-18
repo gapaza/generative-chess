@@ -138,8 +138,6 @@ class ChessGPTv2(tf.keras.Model):
         even_indices = tf.range(seq_len) % 2 == 0
         color_tensor = tf.where(even_indices, masked_1s, masked_2s)
 
-        print(color_tensor)
-
         # Step 6: Return the final tensor
         color_embeddings = self.color_embedding(color_tensor)
 
@@ -165,7 +163,7 @@ class ChessGPTv2(tf.keras.Model):
         input_sequences, target_sequences, piece_types = inputs
         with tf.GradientTape() as tape:
             # Forward Pass
-            predictions = self([input_sequences, piece_types], training=True)
+            predictions, val_predictions = self([input_sequences, piece_types], training=True)
             uloss = self.pt_loss_fn(target_sequences, predictions)
             if config.mixed_precision is True:
                 loss = self.optimizer.get_scaled_loss(uloss)
@@ -185,7 +183,7 @@ class ChessGPTv2(tf.keras.Model):
 
     def test_step(self, inputs):
         input_sequences, target_sequences, piece_types = inputs
-        predictions = self([input_sequences, piece_types], training=False)
+        predictions, val_predictions = self([input_sequences, piece_types], training=False)
         loss = self.pt_loss_fn(target_sequences, predictions)
         self.pt_loss_tracker.update_state(loss)
         self.pt_perplexity_tracker.update_state(target_sequences, predictions)
