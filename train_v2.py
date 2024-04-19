@@ -4,7 +4,7 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 import os
 from model import get_pretrain_model_v2 as get_model
-
+from model.callbacks.EvalsCallback import EvalsCallback
 from preprocess.PTP_DatasetGenerator import PTP_DatasetGenerator
 
 
@@ -27,7 +27,7 @@ def train():
 
     # 1. Build Model
     checkpoint_path = config.model_path
-    model = get_model(checkpoint_path=None)
+    model = get_model(checkpoint_path=checkpoint_path)
 
     # 2. Get Optimizer
     optimizer, jit_compile = get_optimizer()
@@ -37,13 +37,9 @@ def train():
 
     # 4. Get Datasets
     train_dataset, val_dataset = get_dataset()
-    # train_dataset = train_dataset.take(200)
-
-    # train_dataset = train_dataset.rebatch(128)
-    # val_dataset = val_dataset.rebatch(128)
 
     # 5. Get Checkpoints
-    checkpoints = get_checkpoints()
+    checkpoints = get_checkpoints(checkpoint_path)
 
 
     # 6. Train Model
@@ -55,7 +51,7 @@ def train():
     )
 
     # Save history to file
-    history_path = os.path.join(config.results_dir, 'history_2x_128_2048_8_piece.txt')
+    history_path = os.path.join(config.results_dir, 'history.txt')
     with open(history_path, 'w') as f:
         f.write(str(history.history))
 
@@ -87,14 +83,15 @@ def get_dataset():
 
 def get_optimizer():
     jit_compile = False
-    learning_rate = 0.001  # --> 0.00005
-    learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-        0.0,
-        14000,
-        alpha=0.05,
-        warmup_target=learning_rate,
-        warmup_steps=1000
-    )
+    # learning_rate = 0.001  # --> 0.00005
+    # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+    #     0.0,
+    #     14000,
+    #     alpha=0.05,
+    #     warmup_target=learning_rate,
+    #     warmup_steps=1000
+    # )
+    learning_rate = 0.000025
     optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learning_rate)
     if config.mixed_precision is True:
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
@@ -102,7 +99,7 @@ def get_optimizer():
 
 
 
-def get_checkpoints():
+def get_checkpoints(checkpoint_path):
     checkpoints = []
     model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
         filepath=config.model_path,
@@ -111,7 +108,9 @@ def get_checkpoints():
         mode='min',
         save_best_only=True
     )
+    eval_callback = EvalsCallback(10000, checkpoint_path, model_type='v2')
     checkpoints.append(model_checkpoint)
+    checkpoints.append(eval_callback)
     return checkpoints
 
 

@@ -35,11 +35,6 @@ class ChessGPT(tf.keras.Model):
             config.embed_dim,
             mask_zero=True
         )
-        # self.piece_embedding = keras.layers.Embedding(
-        #     7,  # pawn, knight, bishop, rook, queen, king
-        #     config.embed_dim,
-        #     mask_zero=True
-        # )
         self.positional_embedding = RotaryEmbedding()
 
         # Decoder Stack
@@ -82,7 +77,6 @@ class ChessGPT(tf.keras.Model):
         # Move Embeddings
         move_embeddings = self.embedding_layer(inputs)
         move_embeddings += self.get_color_embeddings(inputs)
-        # move_embeddings += self.piece_embedding(piece_seq)
 
         # print(move_embeddings)
         move_embeddings = self.positional_embedding(move_embeddings)
@@ -198,13 +192,14 @@ class ChessGPT(tf.keras.Model):
     pt_perplexity_tracker = keras_nlp.metrics.Perplexity(name="perplexity", from_logits=True, mask_token_id=0)
 
     def train_step(self, inputs):
+        # input_sequences, target_sequences = inputs
         # input_sequences, target_sequences, piece_types = inputs
-        input_sequences, target_sequences = inputs
+        input_sequences, target_sequences, piece_types, masks = inputs
         with tf.GradientTape() as tape:
             # Forward Pass
             # predictions = self([input_sequences, piece_types], training=True)
             predictions = self(input_sequences, training=True)
-            uloss = self.pt_loss_fn(target_sequences, predictions)
+            uloss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
             if config.mixed_precision is True:
                 loss = self.optimizer.get_scaled_loss(uloss)
             else:
@@ -217,18 +212,19 @@ class ChessGPT(tf.keras.Model):
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
         self.pt_loss_tracker.update_state(uloss)
-        self.pt_perplexity_tracker.update_state(target_sequences, predictions)
+        self.pt_perplexity_tracker.update_state(target_sequences, predictions, sample_weight=masks)
 
         return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result()}
 
     def test_step(self, inputs):
+        # input_sequences, target_sequences = inputs
         # input_sequences, target_sequences, piece_types = inputs
-        input_sequences, target_sequences = inputs
+        input_sequences, target_sequences, piece_types, masks = inputs
         # predictions = self([input_sequences, piece_types], training=False)
         predictions = self(input_sequences, training=False)
-        loss = self.pt_loss_fn(target_sequences, predictions)
+        loss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
         self.pt_loss_tracker.update_state(loss)
-        self.pt_perplexity_tracker.update_state(target_sequences, predictions)
+        self.pt_perplexity_tracker.update_state(target_sequences, predictions, sample_weight=masks)
 
         return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result()}
 

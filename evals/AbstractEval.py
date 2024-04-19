@@ -120,6 +120,9 @@ class AbstractEval:
         for theme in self.themes:
             self.eval_history[theme] = []
 
+        # Eval cache
+        self.eval_cache = {}
+
         # print('Loaded', len(self.puzzles), 'puzzles.')
         # print(self.puzzles[0])
         # print(self.themes)
@@ -259,25 +262,32 @@ class AbstractEval:
     # Validate model
     # ---------------------------------
 
-    def run_eval(self, model, type='v1', save_name=None):
+    def run_eval(self, model, type='v1', save_name=None, themes=None):
         run_results = {}
-        for theme in self.themes:
+        if themes is None:
+            themes = self.themes
+        for theme in themes:
             accuracy = self.run_eval_theme(model, theme, type=type)
             run_results[theme] = accuracy
+
         if save_name is not None:
             # save as json file in eval_results_dir
             file_name = save_name + '.json'
             full_save_dir = os.path.join(self.eval_results_dir, file_name)
             with open(full_save_dir, 'w') as f:
                 json.dump(run_results, f, indent=4)
-        return run_results
+        return self.eval_history
 
     def run_eval_theme(self, model, theme, type='v1'):
 
         accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy()
 
-        puzzles = self.filter_puzzles(theme)
-        dataset = self.process_puzzles(puzzles)
+        if theme not in self.eval_cache:
+            puzzles = self.filter_puzzles(theme)
+            dataset = self.process_puzzles(puzzles)
+            self.eval_cache[theme] = dataset
+        else:
+            dataset = self.eval_cache[theme]
 
         p_batches = tqdm(dataset, desc='Evaluating '+theme+'...')
         for input_sequences, label_sequences, piece_encodings, masks in p_batches:
@@ -288,10 +298,14 @@ class AbstractEval:
             else:
                 raise ValueError('Invalid model type')
             accuracy_tracker.update_state(label_sequences, predictions, sample_weight=masks)
-            p_batches.set_postfix(result=accuracy_tracker.result().numpy())
+            if len(self.eval_history[theme]) > 0:
+                postfix_val = accuracy_tracker.result().numpy() - self.eval_history[theme][-1]
+            else:
+                postfix_val = accuracy_tracker.result().numpy()
+            p_batches.set_postfix(result=postfix_val)
 
         accuracy = accuracy_tracker.result().numpy()
-        self.eval_history[theme].append(accuracy)
+        self.eval_history[theme].append(np.float64(accuracy))
         return np.float64(accuracy)
 
 
