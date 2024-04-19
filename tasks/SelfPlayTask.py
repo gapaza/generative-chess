@@ -612,7 +612,7 @@ class SelfPlayTask(AbstractTask):
         tf.TensorSpec(shape=(None, None), dtype=tf.float32),
     ])
     def _sample_critic(self, observation_input):
-        t_value = self.c_critic.vcall(observation_input)  # (batch, seq_len, 2)
+        pred, t_value = self.c_critic(observation_input)  # (batch, seq_len, 2)
         t_value = t_value[:, :, 0]
         return t_value
 
@@ -692,7 +692,7 @@ class SelfPlayTask(AbstractTask):
     ):
 
         with tf.GradientTape() as tape:  # Record operations for automatic differentiation.
-            pred_values = self.c_critic.vcall(observation_buffer)  # (batch, seq_len, 2)
+            preds, pred_values = self.c_critic(observation_buffer)  # (batch, seq_len, 2)
 
             # Value Loss (mse)
             value_loss = tf.reduce_mean((return_buffer - pred_values) ** 2)

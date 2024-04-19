@@ -262,12 +262,12 @@ class AbstractEval:
     # Validate model
     # ---------------------------------
 
-    def run_eval(self, model, type='v1', save_name=None, themes=None):
+    def run_eval(self, model, save_name=None, themes=None):
         run_results = {}
         if themes is None:
             themes = self.themes
         for theme in themes:
-            accuracy = self.run_eval_theme(model, theme, type=type)
+            accuracy = self.run_eval_theme(model, theme)
             run_results[theme] = accuracy
 
         if save_name is not None:
@@ -278,7 +278,7 @@ class AbstractEval:
                 json.dump(run_results, f, indent=4)
         return self.eval_history
 
-    def run_eval_theme(self, model, theme, type='v1'):
+    def run_eval_theme(self, model, theme):
 
         accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy()
 
@@ -291,9 +291,9 @@ class AbstractEval:
 
         p_batches = tqdm(dataset, desc='Evaluating '+theme+'...')
         for input_sequences, label_sequences, piece_encodings, masks in p_batches:
-            if type == 'v1':
-                predictions = model(input_sequences, training=False)
-            elif type == 'v2':
+            if model.m_type == 'v1':
+                predictions, val_predictions = model(input_sequences, training=False)
+            elif model.m_type == 'v2':
                 predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
             else:
                 raise ValueError('Invalid model type')

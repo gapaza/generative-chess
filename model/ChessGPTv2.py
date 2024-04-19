@@ -19,6 +19,7 @@ from keras_nlp.layers import RotaryEmbedding
 class ChessGPTv2(tf.keras.Model):
     def __init__(self):
         super().__init__(name='ChessGPTv2')
+        self.m_type = 'v2'
         self.supports_masking = True
         self.dense_dim = config.dense_dim
         self.num_heads = config.heads

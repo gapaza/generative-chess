@@ -108,7 +108,7 @@ def get_checkpoints(checkpoint_path):
         mode='min',
         save_best_only=True
     )
-    eval_callback = EvalsCallback(10000, checkpoint_path, model_type='v2')
+    eval_callback = EvalsCallback(10000, checkpoint_path)
     checkpoints.append(model_checkpoint)
     checkpoints.append(eval_callback)
     return checkpoints

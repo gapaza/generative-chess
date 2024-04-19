@@ -19,6 +19,7 @@ from keras_nlp.layers import RotaryEmbedding
 class ChessGPT(tf.keras.Model):
     def __init__(self):
         super().__init__(name='ChessGPT')
+        self.m_type = 'v1'
         self.supports_masking = True
         self.dense_dim = config.dense_dim
         self.num_heads = config.heads
@@ -100,52 +101,16 @@ class ChessGPT(tf.keras.Model):
         # decoded_move = self.decoder_15(decoded_move, use_causal_mask=True, training=training)
         # decoded_move = self.decoder_16(decoded_move, use_causal_mask=True, training=training)
 
-
         # Move Prediction Head
         move_predictions = self.move_prediction_head(decoded_move)
 
-        return move_predictions
+        # Value Prediction Head
+        value_predictions = self.value_prediction_head(decoded_move)
 
-    def vcall(self, inputs, training=False):
-        # inputs, piece_seq = inputs
-
-        # Move Embeddings
-        move_embeddings = self.embedding_layer(inputs)
-        move_embeddings += self.get_color_embeddings(inputs)
-        # move_embeddings += self.piece_embedding(piece_seq)
-
-        # print(move_embeddings)
-        move_embeddings = self.positional_embedding(move_embeddings)
-
-        # Decoder Stack
-        decoded_move = move_embeddings
-        decoded_move = self.decoder_1(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_2(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_3(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_4(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_5(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_6(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_7(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_8(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_9(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_10(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_11(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_12(decoded_move, use_causal_mask=True, training=training)
-        # decoded_move = self.decoder_13(decoded_move, use_causal_mask=True, training=training)
-        # decoded_move = self.decoder_14(decoded_move, use_causal_mask=True, training=training)
-        # decoded_move = self.decoder_15(decoded_move, use_causal_mask=True, training=training)
-        # decoded_move = self.decoder_16(decoded_move, use_causal_mask=True, training=training)
-
-        # Move Prediction Head
-        value_prediction = self.value_prediction_head(decoded_move)
-
-        return value_prediction
-
-
+        return move_predictions, value_predictions
 
     def get_color_embeddings(self, input):
         input_tensor = input
-        batch_size = tf.shape(input)[0]
         seq_len = tf.shape(input)[1]
 
         # Step 1: Create a boolean mask
@@ -162,7 +127,6 @@ class ChessGPT(tf.keras.Model):
         masked_1s = tensor_1s * mask
 
         # Step 5: Gather even and odd elements
-        # Create an index map where even indices map to 1s and odd indices map to 2s
         even_indices = tf.range(seq_len) % 2 == 0
         color_tensor = tf.where(even_indices, masked_1s, masked_2s)
 
@@ -171,11 +135,7 @@ class ChessGPT(tf.keras.Model):
         # Step 6: Return the final tensor
         color_embeddings = self.color_embedding(color_tensor)
 
-
-
         return color_embeddings
-
-
 
 
     def get_config(self):
@@ -185,7 +145,6 @@ class ChessGPT(tf.keras.Model):
     @classmethod
     def from_config(cls, config):
         return cls(**config)
-
 
     pt_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE, from_logits=True, ignore_class=0)
     pt_loss_tracker = tf.keras.metrics.Mean(name="loss")
@@ -197,8 +156,7 @@ class ChessGPT(tf.keras.Model):
         input_sequences, target_sequences, piece_types, masks = inputs
         with tf.GradientTape() as tape:
             # Forward Pass
-            # predictions = self([input_sequences, piece_types], training=True)
-            predictions = self(input_sequences, training=True)
+            predictions, val_predcitions = self(input_sequences, training=True)
             uloss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
             if config.mixed_precision is True:
                 loss = self.optimizer.get_scaled_loss(uloss)
@@ -220,8 +178,7 @@ class ChessGPT(tf.keras.Model):
         # input_sequences, target_sequences = inputs
         # input_sequences, target_sequences, piece_types = inputs
         input_sequences, target_sequences, piece_types, masks = inputs
-        # predictions = self([input_sequences, piece_types], training=False)
-        predictions = self(input_sequences, training=False)
+        predictions, val_predcitions = self(input_sequences, training=False)
         loss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
         self.pt_loss_tracker.update_state(loss)
         self.pt_perplexity_tracker.update_state(target_sequences, predictions, sample_weight=masks)
