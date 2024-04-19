@@ -54,6 +54,11 @@ def train():
         callbacks=checkpoints
     )
 
+    # Save history to file
+    history_path = os.path.join(config.results_dir, 'history_2x_128_2048_8_piece.txt')
+    with open(history_path, 'w') as f:
+        f.write(str(history.history))
+
 
 
 
@@ -82,13 +87,13 @@ def get_dataset():
 
 def get_optimizer():
     jit_compile = False
-    learning_rate = 0.001
+    learning_rate = 0.001  # --> 0.00005
     learning_rate = tf.keras.optimizers.schedules.CosineDecay(
         0.0,
-        100000,
-        alpha=0.1,
+        14000,
+        alpha=0.05,
         warmup_target=learning_rate,
-        warmup_steps=500
+        warmup_steps=1000
     )
     optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learning_rate)
     if config.mixed_precision is True:

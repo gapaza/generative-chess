@@ -59,15 +59,14 @@ def padding_func():
 
 
 if __name__ == "__main__":
-    padding_func()
-    exit(0)
+    # padding_func()
+    # exit(0)
 
     # Example UCI move sequence
     uci_moves = """
     
     
-    b1c3 b7b6 e2e4 c8b7 f2f4 e7e6 d2d3 d7d6 g1f3 b8d7 g2g3 c7c5 f1g2 g8f6 e1g1 f8e7 c1e3 e8g8 h2h3 a7a6 g3g4 h7h6 d1e1 b6b5 a1d1 a8c8 g4g5 h6g5 f3g5 b5b4 c3e2 f6e8 e1g3 g7g6 e3c1 e8g7 g3e3 a6a5 b2b3 e7f6 c1d2 f8e8 d2e1 d8c7 d3d4 c5d4 e3d4 f6d4 e2d4 c7b6 e1f2 b6a6 h3h4 g7h5 d4b5 c8c2 b5c7 a6e2 c7e8 h5f4 e8f6 d7f6 g5f3 f6e4 f3d4 e2g4 d4c2 g4g2
-
+d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5 g1f3 d5c3 b2c3 f8g7 e2e4 c7c5 f1c4 b8c6 e1g1 c5d4 c3d4 c6d4 a1b1 e8g8 c1b2 e7e5 c4d5 a8b8 f3d4 e5d4 b2d4 b7b6 d4g7 g8g7 d1d4 g7g8 f1d1 c8b7 d4c3 b7d5 d1d5 b8c8 d5d8 c8c3 d8f8 g8f8 b1b2
 
 
 """
