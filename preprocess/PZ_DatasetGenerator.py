@@ -25,10 +25,15 @@ def worker(puzzle):
     return AbstractEval.process_puzzle(puzzle)
 
 
+# ------------------------------
+# Datasets
+# - games-128b
+# - puzzles-128b
+# - games-puzzles-128b
 
 small_ds = False
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'combined-dataset-piece-puzzle-64b')
+curr_dataset = os.path.join(config.datasets_dir, 'games-puzzles-128b')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -36,6 +41,7 @@ if not os.path.exists(curr_dataset):
 # ------------------------------
 # UCI Games
 # ------------------------------
+use_games = True
 uci_dir = os.path.join(config.games_dir, 'combined')
 uci_piece_dir = os.path.join(config.games_dir, 'combined_piece')
 
@@ -43,6 +49,7 @@ uci_piece_dir = os.path.join(config.games_dir, 'combined_piece')
 # ------------------------------
 # Puzzles
 # ------------------------------
+use_puzzles = True
 puzzles_dir = os.path.join(config.datasets_dir, 'evals', 'train', 'puzzles.pkl')
 
 
@@ -117,31 +124,40 @@ class PZ_DatasetGenerator:
     def parse_dataset(self, move_files, piece_files, puzzles, train=True):
 
         # 1. UCI Games
-        full_dataset = tf.data.TextLineDataset(move_files)
+        if use_games is True:
+            full_dataset = tf.data.TextLineDataset(move_files)
 
-        piece_dataset = tf.data.TextLineDataset(piece_files)
-        piece_dataset = piece_dataset.map(language_modeling.pad_piece_dataset, num_parallel_calls=tf.data.AUTOTUNE)
+            piece_dataset = tf.data.TextLineDataset(piece_files)
+            piece_dataset = piece_dataset.map(language_modeling.pad_piece_dataset, num_parallel_calls=tf.data.AUTOTUNE)
 
-        uci_dataset = tf.data.Dataset.zip((full_dataset, piece_dataset))
-        uci_dataset = uci_dataset.batch(config.global_batch_size, drop_remainder=True)
-        uci_dataset = uci_dataset.map(language_modeling.preprocess_decoder_batch_piece_sample_weights, num_parallel_calls=tf.data.AUTOTUNE)  # encoded_inputs, encoded_labels, pieces, sample_weights
+            uci_dataset = tf.data.Dataset.zip((full_dataset, piece_dataset))
+            uci_dataset = uci_dataset.batch(config.global_batch_size, drop_remainder=True)
+            uci_dataset = uci_dataset.map(language_modeling.preprocess_decoder_batch_piece_sample_weights, num_parallel_calls=tf.data.AUTOTUNE)  # encoded_inputs, encoded_labels, pieces, sample_weights
+        else:
+            uci_dataset = None
 
-        # 2. Puzzles
-        puzzle_dataset = self.process_puzzles(puzzles)
-        print('Finished processing puzzles')
+        # 2. Process puzzles (if applicable)
+        if use_puzzles is True:
+            puzzle_dataset = self.process_puzzles(puzzles)
+            print('Finished processing puzzles')
 
-        # 3. Combine datasets, save to intermediate dataset
-        combined_dataset = puzzle_dataset.concatenate(uci_dataset)
+            # 3. Combine datasets, save to intermediate dataset
+            if uci_dataset is not None:
+                combined_dataset = puzzle_dataset.concatenate(uci_dataset)
+            else:
+                combined_dataset = puzzle_dataset
 
-        if train is True:
-            combined_dataset = combined_dataset.rebatch(1, drop_remainder=True)
-            combined_dataset = combined_dataset.prefetch(tf.data.AUTOTUNE)
-            print('Saving intermediate dataset')
-            combined_dataset.save(self.intermediate_dir)
-            combined_dataset = tf.data.Dataset.load(self.intermediate_dir)
-            cardinality = tf.data.experimental.cardinality(combined_dataset).numpy()
-            combined_dataset = combined_dataset.shuffle(cardinality)
-            combined_dataset = combined_dataset.rebatch(config.global_batch_size, drop_remainder=True)
+            if train is True and uci_dataset is not None:
+                combined_dataset = combined_dataset.rebatch(1, drop_remainder=True)
+                combined_dataset = combined_dataset.prefetch(tf.data.AUTOTUNE)
+                print('Saving intermediate dataset')
+                combined_dataset.save(self.intermediate_dir)
+                combined_dataset = tf.data.Dataset.load(self.intermediate_dir)
+                cardinality = tf.data.experimental.cardinality(combined_dataset).numpy()
+                combined_dataset = combined_dataset.shuffle(cardinality)
+                combined_dataset = combined_dataset.rebatch(config.global_batch_size, drop_remainder=True)
+        else:
+            combined_dataset = uci_dataset
 
         combined_dataset = combined_dataset.prefetch(tf.data.AUTOTUNE)
         return combined_dataset
@@ -295,11 +311,11 @@ class PZ_DatasetGenerator:
 if __name__ == '__main__':
 
     generator = PZ_DatasetGenerator(curr_dataset)
-    # dataset = generator.get_dataset(save=True, small=small_ds)
+    dataset = generator.get_dataset(save=True, small=small_ds)
     # generator.get_num_batches()
     # dataset_train, dataset_val = generator.load_datasets()
 
-    generator.debug_dataset()
+    # generator.debug_dataset()
 
 
 

@@ -75,9 +75,9 @@ num_experts = 8
 dropout = 0.1
 
 # --> Training
-pt_dataset = os.path.join(datasets_dir, 'combined-dataset-piece-puzzle-64b')
+pt_dataset = os.path.join(datasets_dir, 'games-puzzles-128b')
 epochs = 200
-global_batch_size = 64  # 64, 128, 256, 512, 1024
+global_batch_size = 128  # 64, 128, 256, 512, 1024
 
 
 
