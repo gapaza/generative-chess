@@ -63,7 +63,7 @@ stockfish_path = '/home/ec2-user/engines/Stockfish-sf_16.1/src/stockfish'
 #      |_|  |_| \___/  \__,_| \___||_|
 #
 
-model_path = os.path.join(weights_dir, 'chess-gpt-v3')
+model_path = os.path.join(weights_dir, 'chess-gpt-v4')
 
 dense_dim = 2048  # 2048 nominal
 heads = 8

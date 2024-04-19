@@ -7,6 +7,10 @@ import tensorflow as tf
 from tqdm import tqdm
 import random
 from copy import deepcopy
+import json
+import numpy as np
+from matplotlib import pyplot as plt
+import pandas as pd
 
 puzzles_dir = os.path.join(config.datasets_dir, 'puzzles')
 
@@ -119,6 +123,11 @@ class AbstractEval:
         # print('Loaded', len(self.puzzles), 'puzzles.')
         # print(self.puzzles[0])
         # print(self.themes)
+
+        # Results
+        self.eval_results_dir = os.path.join(config.results_dir, 'evals')
+        if not os.path.exists(self.eval_results_dir):
+            os.makedirs(self.eval_results_dir)
 
     def sep_puzzles(self):
         # shuffle puzzles
@@ -250,12 +259,20 @@ class AbstractEval:
     # Validate model
     # ---------------------------------
 
-    def run_eval(self, model):
+    def run_eval(self, model, type='v1', save_name=None):
+        run_results = {}
         for theme in self.themes:
-            self.run_eval_theme(model, theme)
-        return deepcopy(self.eval_history)
+            accuracy = self.run_eval_theme(model, theme, type=type)
+            run_results[theme] = accuracy
+        if save_name is not None:
+            # save as json file in eval_results_dir
+            file_name = save_name + '.json'
+            full_save_dir = os.path.join(self.eval_results_dir, file_name)
+            with open(full_save_dir, 'w') as f:
+                json.dump(run_results, f, indent=4)
+        return run_results
 
-    def run_eval_theme(self, model, theme):
+    def run_eval_theme(self, model, theme, type='v1'):
 
         accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy()
 
@@ -264,32 +281,91 @@ class AbstractEval:
 
         p_batches = tqdm(dataset, desc='Evaluating '+theme+'...')
         for input_sequences, label_sequences, piece_encodings, masks in p_batches:
-            predictions = model(input_sequences, training=False)
+            if type == 'v1':
+                predictions = model(input_sequences, training=False)
+            elif type == 'v2':
+                predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
+            else:
+                raise ValueError('Invalid model type')
             accuracy_tracker.update_state(label_sequences, predictions, sample_weight=masks)
             p_batches.set_postfix(result=accuracy_tracker.result().numpy())
 
         accuracy = accuracy_tracker.result().numpy()
         self.eval_history[theme].append(accuracy)
-        return accuracy
+        return np.float64(accuracy)
 
 
+    # ---------------------------------
+    # Plotting
+    # ---------------------------------
 
+    def histogram_comparison(self, file_names, themes=None):
+        if themes is None:
+            themes = self.themes
+        data_dicts = []
+        for file_name in file_names:
+            run_data = {}
+            file_path = os.path.join(self.eval_results_dir, file_name+'.json')
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            for theme in themes:
+                run_data[theme] = data[theme]
+            data_dicts.append(run_data)
+
+        # Convert the list of dictionaries to a DataFrame
+        fig = plt.subplots(figsize=(10, 6))
+
+        bar_width = 0.25
+        all_model_values = []
+        for data in data_dicts:
+            model_values = []
+            for key, val in data.items():
+                model_values.append(val)
+            all_model_values.append(model_values)
+
+        # Set position of bar on X axis
+        br_list = []
+        br1 = np.arange(len(all_model_values[0]))
+        br_list.append(br1)
+        for i in range(1, len(all_model_values)):
+            br = [x + bar_width for x in br_list[i-1]]
+            br_list.append(br)
+
+        idx = 0
+        for model_values, br in zip(all_model_values, br_list):
+            plt.bar(br, model_values, width=bar_width, edgecolor='grey', label=file_names[idx])
+            idx += 1
+
+        plt.xlabel('Eval', fontweight='bold', fontsize=15)
+        plt.ylabel('Accuracy', fontweight='bold', fontsize=15)
+        plt.xticks([r + bar_width for r in range(len(all_model_values[0]))], themes)
+        plt.legend()
+
+        # Save the plot
+        plt.savefig(os.path.join(self.eval_results_dir, 'histogram.png'))
 
 
 
 
 from model import get_pretrain_model as get_model
+# from model import get_pretrain_model_v2 as get_model
 
 if __name__ == '__main__':
-    checkpoint_path = config.model_path
+    # checkpoint_path = config.model_path
+
+    model_name = 'chess-gpt-v3'
+    checkpoint_path = os.path.join(config.weights_dir, model_name)
     model = get_model(checkpoint_path=checkpoint_path)
 
     ae = AbstractEval()
-    results = ae.run_eval(model)
 
-    # Nicely format and print dictionary results
-    for theme, accs in results.items():
-        print(theme, accs[-1])
+
+    # results = ae.run_eval(model, type='v1', save_name=model_name)
+
+
+    compare_files = ['chess-gpt-v4-1', 'chess-gpt-v4-2', 'chess-gpt-v3']
+    compare_themes = ['advantage', 'mate', 'fork', 'pin', 'equality', 'opening', 'middlegame', 'endgame']
+    ae.histogram_comparison(compare_files, themes=compare_themes)
 
 
 
