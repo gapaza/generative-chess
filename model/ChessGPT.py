@@ -172,7 +172,7 @@ class ChessGPT(tf.keras.Model):
         even_indices = tf.range(seq_len) % 2 == 0
         color_tensor = tf.where(even_indices, masked_1s, masked_2s)
 
-        print(color_tensor)
+        # print(color_tensor)
 
         # Step 6: Return the final tensor
         color_embeddings = self.color_embedding(color_tensor)

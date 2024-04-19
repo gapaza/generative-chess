@@ -63,7 +63,7 @@ stockfish_path = '/home/ec2-user/engines/Stockfish-sf_16.1/src/stockfish'
 #      |_|  |_| \___/  \__,_| \___||_|
 #
 
-model_path = os.path.join(weights_dir, 'chess-gpt-v4')
+model_path = os.path.join(weights_dir, 'chess-gpt-v3')
 
 dense_dim = 2048  # 2048 nominal
 heads = 8
@@ -75,9 +75,9 @@ num_experts = 8
 dropout = 0.1
 
 # --> Training
-pt_dataset = os.path.join(datasets_dir, 'combined-dataset-piece-128b')
+pt_dataset = os.path.join(datasets_dir, 'combined-dataset-piece-64b')
 epochs = 200
-global_batch_size = 128  # 64, 128, 256, 512, 1024
+global_batch_size = 64  # 64, 128, 256, 512, 1024
 
 
 

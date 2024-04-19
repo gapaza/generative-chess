@@ -14,7 +14,7 @@ if __name__ == '__main__':
     # model_path = rl_model_path
 
 
-    api = ChessGPT_API(model_path=model_path, user_plays_white=True)
+    api = ChessGPT_API(model_path=model_path, user_plays_white=False)
     api.play_interactive_game()
 
 

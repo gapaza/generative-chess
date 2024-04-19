@@ -31,6 +31,17 @@ def preprocess_decoder_batch(moves):
 # Piece Encoding
 # -------------------------
 
+def get_padded_piece_encoding_from_str(uci_string):
+    game_piece_encoding = get_game_piece_encoding_from_str(uci_string).split(' ')
+    game_piece_encoding = [int(x) for x in game_piece_encoding]
+    game_piece_encoding = [1] + game_piece_encoding
+    while len(game_piece_encoding) < config.seq_length:
+        game_piece_encoding.append(0)
+    if len(game_piece_encoding) > config.seq_length:
+        game_piece_encoding = game_piece_encoding[:config.seq_length]
+    return game_piece_encoding
+
+
 def get_game_piece_encoding_from_str(uci_string):
     uci_game_moves = uci_string.split(' ')
     game = chess.Board()
@@ -39,13 +50,18 @@ def get_game_piece_encoding_from_str(uci_string):
     game_piece_types = []
     for move_uci in uci_game_moves:
         try:
-            if move_uci in ['', '[start]'] or move_uci in config.end_of_game_tokens or move_uci in config.special_tokens:
-                game_piece_types.append(0)
+            if move_uci == '[start]':
+                piece_type = 1
+                game_piece_types.append(piece_type)
+                continue
+            if move_uci in [''] or move_uci in config.end_of_game_tokens or move_uci in config.special_tokens:
+                piece_type = 0
+                game_piece_types.append(piece_type)
                 continue
             move = chess.Move.from_uci(move_uci)
             piece = game.piece_at(move.from_square)
             if piece is not None:
-                piece_type = piece.piece_type
+                piece_type = piece.piece_type + 1
             else:
                 piece_type = 0
 
@@ -73,7 +89,7 @@ def get_game_piece_encoding(text_tensor):
             move = chess.Move.from_uci(move_uci)
             piece = game.piece_at(move.from_square)
             if piece is not None:
-                piece_type = piece.piece_type
+                piece_type = piece.piece_type + 1
             else:
                 piece_type = 0
 
@@ -100,7 +116,8 @@ def pad_piece_dataset(piece_vector):
     # Add start token to the beginning of the piece vector
     pieces_split = tf.strings.split(piece_vector, ' ')
     pieces_split = tf.strings.to_number(pieces_split, out_type=tf.int32)
-    start_token = tf.fill([1], 0)
+    pieces_split = pieces_split + 1  # Add 1 to all pieces to account for start token at 0
+    start_token = tf.fill([1], 1)  # Start token is 1
     start_token = tf.cast(start_token, tf.int32)
     pieces_split = tf.concat([start_token, pieces_split], axis=0)
     pieces_split = pieces_split[:config.seq_length]
@@ -118,7 +135,7 @@ def preprocess_decoder_batch_piece(moves, pieces):
 
     # 1. Encode moves
     encoded_moves = config.encode_tf(moves)
-    print('Encoded Moves', encoded_moves)
+    # print('Encoded Moves', encoded_moves)
 
     # 2. Create move inputs
     encoded_shape = tf.shape(encoded_moves)
@@ -137,6 +154,45 @@ def preprocess_decoder_batch_piece(moves, pieces):
     pieces = tf.cast(pieces, tf.int16)
 
     return encoded_inputs, encoded_labels, pieces
+
+
+
+
+
+def preprocess_decoder_batch_piece_sample_weights(moves, pieces):
+
+    # 1. Encode moves
+    encoded_moves = config.encode_tf(moves)
+    # print('Encoded Moves', encoded_moves)
+
+    # 2. Create move inputs
+    encoded_shape = tf.shape(encoded_moves)
+    batch_size = encoded_shape[0]
+    seq_length = encoded_shape[1]
+    start_token = tf.fill([batch_size, 1], config.start_token_id)
+    encoded_inputs = tf.concat([start_token, encoded_moves], axis=1)
+    encoded_inputs = encoded_inputs[:, :seq_length]
+
+    # 3. Create move labels
+    encoded_labels = encoded_moves
+
+    # Optionally cast to int16 to save memory
+    encoded_inputs = tf.cast(encoded_inputs, tf.int16)
+    encoded_labels = tf.cast(encoded_labels, tf.int16)
+    pieces = tf.cast(pieces, tf.int16)
+
+    # 4. Create sample weights
+    # Sample weights are 1 for all encoded_labels except for padding token (idx 0)
+    sample_weights = tf.cast(tf.not_equal(encoded_labels, 0), tf.float16)
+
+    return encoded_inputs, encoded_labels, pieces, sample_weights
+
+
+
+
+
+
+
 
 
 

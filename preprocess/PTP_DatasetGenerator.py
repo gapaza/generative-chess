@@ -198,12 +198,13 @@ class PTP_DatasetGenerator:
     def debug_dataset(self):
         train_dataset, val_dataset = self.load_datasets()
 
-        for item in train_dataset:
+        for idx, item in enumerate(train_dataset):
             input_tensor, label_tensor, piece_tensor = item
             # print('--> Input tensor', input_tensor)
             # print('--> Label tensor', label_tensor)
 
             input_list = input_tensor.numpy().tolist()
+
             input_list_game = input_list[0]
             input_game_tokens = [config.id2token[i] for i in input_list_game]
             print('--> Input game token ids:', input_list_game)
@@ -213,7 +214,8 @@ class PTP_DatasetGenerator:
             piece_tensor_game = piece_tensor[0]
             print('--> Piece tensor:', piece_tensor_game)
 
-            exit(0)
+            if idx > 2:
+                exit(0)
 
         return 0
 
@@ -222,11 +224,11 @@ class PTP_DatasetGenerator:
 if __name__ == '__main__':
 
     generator = PTP_DatasetGenerator(curr_dataset)
-    dataset = generator.get_dataset(save=True, small=small_ds)
+    # dataset = generator.get_dataset(save=True, small=small_ds)
     # generator.get_num_batches()
     # dataset_train, dataset_val = generator.load_datasets()
 
-    # generator.debug_dataset()
+    generator.debug_dataset()
 
 
 
