@@ -76,6 +76,13 @@ def get_dataset():
     dataset_generator = PTP_DatasetGenerator(curr_dataset)
     train_dataset, val_dataset = dataset_generator.load_datasets()
 
+    if config.distributed is True:
+        train_dataset = train_dataset.rebatch(train_dataset, config.global_batch_size)
+        val_dataset = val_dataset.rebatch(val_dataset, config.global_batch_size)
+        train_dataset = config.mirrored_strategy.experimental_distribute_dataset(train_dataset)
+        val_dataset = config.mirrored_strategy.experimental_distribute_dataset(val_dataset)
+        print('-- Distributed Training Enabled --')
+
     return train_dataset, val_dataset
 
 
