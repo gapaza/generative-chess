@@ -9,10 +9,17 @@ from keras_nlp.layers import SinePositionEncoding
 
 from keras_nlp.layers import RotaryEmbedding
 
-# from hydra.alibi_decoder.AlibiDecoder import AlibiDecoder
 
-# from hydra.embedding.RotaryEmbedding import RotaryEmbedding
+# Small Settings
+# dense_dim = config.dense_dim_small
+# heads = config.heads_small
+# embed_dim = config.embed_dim_small
 
+
+# Regular Settings
+dense_dim = config.dense_dim
+heads = config.heads
+embed_dim = config.embed_dim
 
 
 @keras.saving.register_keras_serializable(package="ChessGPT", name="ChessGPT")
@@ -21,19 +28,20 @@ class ChessGPT(tf.keras.Model):
         super().__init__(name='ChessGPT')
         self.m_type = 'v1'
         self.supports_masking = True
-        self.dense_dim = config.dense_dim
-        self.num_heads = config.heads
+        self.dense_dim = dense_dim
+        self.num_heads = heads
+        self.embed_dim = embed_dim
         self.positional = True
 
         # Move Embeddings
         self.embedding_layer = keras.layers.Embedding(
             config.vocab_size,
-            config.embed_dim,
+            self.embed_dim,
             mask_zero=True
         )
         self.color_embedding = keras.layers.Embedding(
             3,
-            config.embed_dim,
+            self.embed_dim,
             mask_zero=True
         )
         self.positional_embedding = RotaryEmbedding()
@@ -48,14 +56,16 @@ class ChessGPT(tf.keras.Model):
         self.decoder_6 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         self.decoder_7 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         self.decoder_8 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
-        self.decoder_9 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
-        self.decoder_10 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
-        self.decoder_11 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
-        self.decoder_12 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        # self.decoder_9 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        # self.decoder_10 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        # self.decoder_11 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        # self.decoder_12 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         # self.decoder_13 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         # self.decoder_14 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         # self.decoder_15 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         # self.decoder_16 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        # self.decoder_17 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        # self.decoder_18 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
 
 
         # Move Prediction Head
@@ -92,14 +102,18 @@ class ChessGPT(tf.keras.Model):
         decoded_move = self.decoder_6(decoded_move, use_causal_mask=True, training=training)
         decoded_move = self.decoder_7(decoded_move, use_causal_mask=True, training=training)
         decoded_move = self.decoder_8(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_9(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_10(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_11(decoded_move, use_causal_mask=True, training=training)
-        decoded_move = self.decoder_12(decoded_move, use_causal_mask=True, training=training)
+        # decoded_move = self.decoder_9(decoded_move, use_causal_mask=True, training=training)
+        # decoded_move = self.decoder_10(decoded_move, use_causal_mask=True, training=training)
+        # decoded_move = self.decoder_11(decoded_move, use_causal_mask=True, training=training)
+        # decoded_move = self.decoder_12(decoded_move, use_causal_mask=True, training=training)
         # decoded_move = self.decoder_13(decoded_move, use_causal_mask=True, training=training)
         # decoded_move = self.decoder_14(decoded_move, use_causal_mask=True, training=training)
         # decoded_move = self.decoder_15(decoded_move, use_causal_mask=True, training=training)
         # decoded_move = self.decoder_16(decoded_move, use_causal_mask=True, training=training)
+        # decoded_move = self.decoder_17(decoded_move, use_causal_mask=True, training=training)
+        # decoded_move = self.decoder_18(decoded_move, use_causal_mask=True, training=training)
+
+
 
         # Move Prediction Head
         move_predictions = self.move_prediction_head(decoded_move)

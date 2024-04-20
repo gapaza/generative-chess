@@ -122,6 +122,7 @@ class AbstractEval:
 
         # Eval cache
         self.eval_cache = {}
+        self.batch_eval_cache = None
 
         # print('Loaded', len(self.puzzles), 'puzzles.')
         # print(self.puzzles[0])
@@ -208,7 +209,8 @@ class AbstractEval:
         dataset = tf.data.Dataset.from_tensor_slices(
             (input_sequences, label_sequences, piece_encodings, masks)
         )
-        dataset = dataset.batch(self.batch_size)
+        # dataset = dataset.batch(len(puzzles))
+        dataset = dataset.batch(256)
         dataset = dataset.map(encode_moves, num_parallel_calls=tf.data.AUTOTUNE)
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
@@ -261,6 +263,40 @@ class AbstractEval:
     # ---------------------------------
     # Validate model
     # ---------------------------------
+
+    def run_eval_batch(self, model, themes=None):
+        if themes is None:
+            themes = self.themes
+        acc_trackers = {}
+        for theme in themes:
+            acc_trackers[theme] = tf.keras.metrics.SparseCategoricalAccuracy()
+
+        if self.batch_eval_cache is None:
+            all_puzzles = []
+            theme_indices = {}  # maps themes to tuples, where the tuple is the start (inclusive) and end (exclusive) index of the theme
+            for theme in themes:
+                puzzles = self.filter_puzzles(theme)
+                all_puzzles += puzzles
+                theme_indices[theme] = (len(all_puzzles) - len(puzzles), len(all_puzzles))
+            dataset = self.process_puzzles(all_puzzles)
+
+            for input_sequences, label_sequences, piece_encodings, masks in dataset:
+                if model.m_type == 'v1':
+                    predictions, val_predictions = model(input_sequences, training=False)
+                elif model.m_type == 'v2':
+                    predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
+                else:
+                    raise ValueError('Invalid model type')
+
+                for theme in themes:
+                    ts, te = theme_indices[theme]
+                    accuracy_tracker = acc_trackers[theme]
+                    accuracy_tracker.update_state(label_sequences[ts:te,:,:], predictions[ts:te,:,:], sample_weight=masks[ts:te,:,:])
+                    accuracy = accuracy_tracker.result().numpy()
+                    self.eval_history[theme].append(np.float64(accuracy))
+
+        return self.eval_history
+
 
     def run_eval(self, model, save_name=None, themes=None):
         run_results = {}
@@ -365,6 +401,8 @@ from model import get_pretrain_model as get_model
 # from model import get_pretrain_model_v2 as get_model
 
 if __name__ == '__main__':
+    evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
+
     # checkpoint_path = config.model_path
 
     model_name = 'chess-gpt-v3'
@@ -374,12 +412,15 @@ if __name__ == '__main__':
     ae = AbstractEval()
 
 
-    # results = ae.run_eval(model, type='v1', save_name=model_name)
+    # results = ae.run_eval(model, themes=evals)
+    # f_path = os.path.join(config.results_dir, 'evals', 'chess-gpt-v3.json')
+    # with open(f_path, 'w') as f:
+    #     json.dump(results, f, indent=4)
 
 
-    compare_files = ['chess-gpt-v4-1', 'chess-gpt-v4-2', 'chess-gpt-v3']
-    compare_themes = ['advantage', 'mate', 'fork', 'pin', 'equality', 'opening', 'middlegame', 'endgame']
-    ae.histogram_comparison(compare_files, themes=compare_themes)
+    # compare_files = ['chess-gpt-v4-1', 'chess-gpt-v4-2', 'chess-gpt-v3']
+    # compare_themes = ['advantage', 'mate', 'fork', 'pin', 'equality', 'opening', 'middlegame', 'endgame']
+    # ae.histogram_comparison(compare_files, themes=compare_themes)
 
 
 

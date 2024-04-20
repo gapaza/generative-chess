@@ -3,12 +3,8 @@ import platform
 import tensorflow as tf
 import tensorflow_addons as tfa
 import os
-from model import get_pretrain_model_v2 as get_model
 from model.callbacks.EvalsCallback import EvalsCallback
 from preprocess.PTP_DatasetGenerator import PTP_DatasetGenerator
-
-
-curr_dataset = config.pt_dataset
 
 #
 #   _______           _         _
@@ -20,14 +16,23 @@ curr_dataset = config.pt_dataset
 #                                          __/ |
 #                                         |___/
 #
+from model import get_pretrain_model as get_model
+# from model import get_pretrain_model_v2 as get_model
+
+# curr_dataset = config.pt_dataset
+curr_dataset = os.path.join(config.datasets_dir, 'games-puzzles-128b')
+
+
+# save_model = config.model_path
+save_model = os.path.join(config.weights_dir, 'chess-gpt-v6')
+
+load_model = None
+# load_model = curr_model
+
 
 def train():
-
-
-
     # 1. Build Model
-    checkpoint_path = config.model_path
-    model = get_model(checkpoint_path=checkpoint_path)
+    model = get_model(checkpoint_path=load_model)
 
     # 2. Get Optimizer
     optimizer, jit_compile = get_optimizer()
@@ -39,8 +44,7 @@ def train():
     train_dataset, val_dataset = get_dataset()
 
     # 5. Get Checkpoints
-    checkpoints = get_checkpoints(checkpoint_path)
-
+    checkpoints = get_checkpoints(save_model)
 
     # 6. Train Model
     history = model.fit(
@@ -56,10 +60,6 @@ def train():
         f.write(str(history.history))
 
 
-
-
-
-
 #
 #   _    _        _
 #  | |  | |      | |
@@ -72,9 +72,7 @@ def train():
 #
 
 
-
 def get_dataset():
-
     dataset_generator = PTP_DatasetGenerator(curr_dataset)
     train_dataset, val_dataset = dataset_generator.load_datasets()
 
@@ -83,37 +81,34 @@ def get_dataset():
 
 def get_optimizer():
     jit_compile = False
-    # learning_rate = 0.001  # --> 0.00005
-    # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-    #     0.0,
-    #     14000,
-    #     alpha=0.05,
-    #     warmup_target=learning_rate,
-    #     warmup_steps=1000
-    # )
-    learning_rate = 0.000025
+    learning_rate = 0.0005  # --> 0.00005
+    learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+        0.0,
+        100000,
+        alpha=0.1,
+        warmup_target=learning_rate,
+        warmup_steps=1000
+    )
+    # learning_rate = 0.000025
     optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learning_rate)
     if config.mixed_precision is True:
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
     return optimizer, jit_compile
 
 
-
 def get_checkpoints(checkpoint_path):
     checkpoints = []
     model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
-        filepath=config.model_path,
+        filepath=save_model,
         save_weights_only=True,
         monitor='val_loss',
         mode='min',
         save_best_only=True
     )
-    eval_callback = EvalsCallback(10000, checkpoint_path)
+    eval_callback = EvalsCallback(2000, checkpoint_path)
     checkpoints.append(model_checkpoint)
     checkpoints.append(eval_callback)
     return checkpoints
-
-
 
 
 def train_distributed():
@@ -126,7 +121,3 @@ if __name__ == "__main__":
         train()
     else:
         train_distributed()
-
-
-
-

@@ -6,7 +6,7 @@ import platform
 
 
 # Tensorflow Core
-mixed_precision = False
+mixed_precision = True
 if platform.system() != 'Darwin':
     if mixed_precision is True:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
@@ -38,6 +38,7 @@ datasets_dir = os.path.join(root_dir, 'datasets')
 weights_dir = os.path.join(root_dir, 'weights')
 results_dir = os.path.join(root_dir, 'results')
 games_dir = os.path.join(root_dir, 'games')
+evals_dir = os.path.join(root_dir, 'evals')
 
 if not os.path.exists(datasets_dir):
     os.makedirs(datasets_dir)
@@ -63,13 +64,22 @@ stockfish_path = '/home/ec2-user/engines/Stockfish-sf_16.1/src/stockfish'
 #      |_|  |_| \___/  \__,_| \___||_|
 #
 
-model_path = os.path.join(weights_dir, 'chess-gpt-v4')
+model_path = os.path.join(weights_dir, 'chess-gpt-v3')
 
-dense_dim = 2048  # 2048 nominal
-heads = 8
+# Small Model
+dense_dim_small = 4096  # 512 small, 2048 nominal
+heads_small = 8         # 2 small, 8 nominal
+embed_dim_small = 1024   # 128 small, 512 nominal
+num_experts_small = 2   # 2 small, 8 nominal
+
+# Regular Model
+dense_dim = 2048  # 512 small, 2048 nominal
+heads = 8         # 2 small, 8 nominal
+embed_dim = 512   # 128 small, 512 nominal
+num_experts = 8   # 2 small, 8 nominal
+
+# --> Sequence Length
 seq_length = 128  # 128 nominal
-embed_dim = 512   # 512 nominal
-num_experts = 8
 
 # --> Dropout
 dropout = 0.1

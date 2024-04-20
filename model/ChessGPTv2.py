@@ -9,10 +9,16 @@ from keras_nlp.layers import SinePositionEncoding
 
 from keras_nlp.layers import RotaryEmbedding
 
-# from hydra.alibi_decoder.AlibiDecoder import AlibiDecoder
+# Small Settings
+# dense_dim = config.dense_dim_small
+# heads = config.heads_small
+# embed_dim = config.embed_dim_small
 
-# from hydra.embedding.RotaryEmbedding import RotaryEmbedding
 
+# Regular Settings
+dense_dim = config.dense_dim
+heads = config.heads
+embed_dim = config.embed_dim
 
 
 @keras.saving.register_keras_serializable(package="ChessGPTv2", name="ChessGPTv2")
@@ -21,24 +27,25 @@ class ChessGPTv2(tf.keras.Model):
         super().__init__(name='ChessGPTv2')
         self.m_type = 'v2'
         self.supports_masking = True
-        self.dense_dim = config.dense_dim
-        self.num_heads = config.heads
+        self.dense_dim = dense_dim
+        self.num_heads = heads
+        self.embed_dim = embed_dim
         self.positional = True
 
         # Move Embeddings
         self.embedding_layer = keras.layers.Embedding(
             config.vocab_size,
-            config.embed_dim,
+            self.embed_dim,
             mask_zero=True
         )
         self.color_embedding = keras.layers.Embedding(
             3,
-            config.embed_dim,
+            self.embed_dim,
             mask_zero=True
         )
         self.piece_embedding = keras.layers.Embedding(
             8,  # [start], pawn, knight, bishop, rook, queen, king
-            config.embed_dim,
+            self.embed_dim,
             mask_zero=True
         )
         self.positional_embedding = RotaryEmbedding()
