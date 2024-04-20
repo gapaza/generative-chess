@@ -68,7 +68,7 @@ def calc_reward(engine, game):
         # -------------------------------------
         # Engine-based reward
         # -------------------------------------
-        nodes = 500000
+        nodes = 100000
         analysis = engine.analyse(board, chess.engine.Limit(nodes=nodes), multipv=1)
         top_line = analysis[0]
         top_line_score = top_line["score"]

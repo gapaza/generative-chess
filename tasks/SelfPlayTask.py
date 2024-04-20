@@ -23,6 +23,9 @@ import tensorflow_addons as tfa
 import chess
 import chess.engine
 from stockfish.rewards.reward_1 import calc_reward, calc_reward_batch
+from evals.AbstractEval import AbstractEval
+from evals.plotting.training_comparison import plot_training_comparison
+
 
 def discounted_cumulative_sums(x, discount):
     # Discounted cumulative sums of vectors for computing rewards-to-go and advantage estimates
@@ -34,17 +37,17 @@ def id_seq_to_uci(seq):
 
 
 # Number of self-play games in a mini-batch
-global_mini_batch_size = 32
+global_mini_batch_size = 128
 
 
 use_actor_warmup = True
 critic_warmup_epochs = 0
 
 
-pickup_epoch = 150
+pickup_epoch = 0
 
-run_dir = 4
-run_dir_itr = 4
+run_dir = 5
+run_dir_itr = 0
 
 top_k = None
 
@@ -73,6 +76,9 @@ class SelfPlayTask(AbstractTask):
         self.run_val = run_val
         self.val_itr = val_itr
 
+        # Evals
+        self.eval = AbstractEval()
+
         # Algorithm parameters
         self.mini_batch_size = global_mini_batch_size
         self.nfe = 0
@@ -84,7 +90,7 @@ class SelfPlayTask(AbstractTask):
         self.lam = 0.95
         self.clip_ratio = 0.2
         self.target_kl = 0.0001  # was 0.01
-        self.entropy_coef = 0.00  # was 0.02 originally
+        self.entropy_coef = 0.02  # was 0.02 originally
         self.counter = 0
         self.game_start_token_id = config.start_token_id
         self.num_actions = config.vocab_size
@@ -102,7 +108,7 @@ class SelfPlayTask(AbstractTask):
 
         # Stockfish Engine
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
-        self.engine.configure({'Threads': 24, "Hash": 1024})
+        self.engine.configure({'Threads': 32, "Hash": 1024})
         self.nodes = 200000
         self.lines = 1
 
@@ -112,7 +118,7 @@ class SelfPlayTask(AbstractTask):
         # Optimizer parameters
         self.actor_learning_rate = 0.00001  # 0.0001
         self.critic_learning_rate = 0.0001  # 0.0001
-        self.train_actor_iterations = 10  # was 250
+        self.train_actor_iterations = 250  # was 250
         self.train_critic_iterations = 40  # was 40
         self.beta_1 = 0.9
         if self.run_val is False:
@@ -151,6 +157,7 @@ class SelfPlayTask(AbstractTask):
     def run(self):
         self.build()
 
+        self.run_evals()
         for x in range(self.epochs):
             self.curr_epoch = x
             epoch_info = self.fast_mini_batch()
@@ -162,6 +169,7 @@ class SelfPlayTask(AbstractTask):
                 t_critic_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights_' + str(self.curr_epoch + pickup_epoch))
                 self.c_actor.save_weights(t_actor_save_path)
                 self.c_critic.save_weights(t_critic_save_path)
+
 
         # Save the parameters of the current actor and critic
         self.c_actor.save_weights(self.actor_pretrain_save_path)
@@ -341,7 +349,7 @@ class SelfPlayTask(AbstractTask):
 
 
         batch_total_eval_time = time.time() - curr_time_2
-        sample_time = time.time() - curr_time
+        sample_time = time.time() - curr_time - batch_total_eval_time
         print('\nGen time:', sample_time, 'Eval time:', batch_total_eval_time)
 
 
@@ -727,10 +735,16 @@ class SelfPlayTask(AbstractTask):
 
         if len(self.entropy) % self.plot_freq == 0:
             print('--> PLOTTING')
+            self.run_evals()
             self.plot_ppo()
         else:
             return
 
+    def run_evals(self):
+        evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
+        eval_history = self.eval.run_eval(self.c_critic, themes=evals)
+        eval_history['step_interval'] = global_mini_batch_size
+        plot_training_comparison([eval_history], bounds=False, save_name='evals.png', local_save_dir=self.run_dir)
 
 
     def plot_ppo(self):

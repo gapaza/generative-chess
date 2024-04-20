@@ -7,19 +7,27 @@ from matplotlib import gridspec
 
 save_dir = os.path.join(config.evals_dir, 'out')
 
-def plot_training_comparison(history_files, labels=None, save_name=None):
+def plot_training_comparison(history_files, labels=None, save_name=None, bounds=True, local_save_dir=None):
     evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
 
-    if labels is None:
-        labels = []
+    if type(history_files[0]) is not str:
+        history_files_json = history_files
+        if labels is None:
+            labels = []
+            for idx, history_json in enumerate(history_files_json):
+                labels.append(str(idx))
+    else:
+        if labels is None:
+            labels = []
+            for history_file in history_files:
+                basename = os.path.basename(history_file)
+                labels.append(basename.split('.')[0])
+        history_files_json = []
         for history_file in history_files:
-            basename = os.path.basename(history_file)
-            labels.append(basename.split('.')[0])
+            with open(os.path.join(config.evals_dir, history_file), 'r') as f:
+                history_files_json.append(json.load(f))
 
-    history_files_json = []
-    for history_file in history_files:
-        with open(os.path.join(config.evals_dir, history_file), 'r') as f:
-            history_files_json.append(json.load(f))
+
 
     all_history_steps = []
     for history_json in history_files_json:
@@ -41,14 +49,18 @@ def plot_training_comparison(history_files, labels=None, save_name=None):
         plt.title(eval_name)
         plt.xlabel('Step')
         plt.ylabel('Accuracy')
-        plt.ylim(-0.01, 1)
+        if bounds is True:
+            plt.ylim(-0.01, 1)
         plt.legend()
 
     plt.tight_layout()
+    if local_save_dir is None:
+        local_save_dir = save_dir
+
     if save_name is not None:
-        save_path = os.path.join(save_dir, save_name)
+        save_path = os.path.join(local_save_dir, save_name)
     else:
-        save_path = os.path.join(save_dir, 'training_comparison.png')
+        save_path = os.path.join(local_save_dir, 'training_comparison.png')
     plt.savefig(save_path)
 
 
@@ -56,12 +68,12 @@ def plot_training_comparison(history_files, labels=None, save_name=None):
 def plot_training_comparison_grouped(history_files, labels=None, save_name=None):
     evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
 
+
     if labels is None:
         labels = []
         for history_file in history_files:
             basename = os.path.basename(history_file)
             labels.append(basename.split('.')[0])
-
     history_files_json = []
     for history_file in history_files:
         with open(os.path.join(config.evals_dir, history_file), 'r') as f:

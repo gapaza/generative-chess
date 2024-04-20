@@ -6,7 +6,7 @@ import platform
 
 
 # Tensorflow Core
-mixed_precision = True
+mixed_precision = False
 if platform.system() != 'Darwin':
     if mixed_precision is True:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
@@ -52,7 +52,7 @@ if not os.path.exists(games_dir):
 
 
 # stockfish_path = os.path.join(root_dir, 'stockfish', 'stockfish', 'stockfish_14.1_linux_x64_avx2')
-stockfish_path = '/home/ec2-user/engines/Stockfish-sf_16.1/src/stockfish'
+stockfish_path = '/home/ubuntu/engines/Stockfish-sf_16.1/src/stockfish'
 
 
 #
@@ -64,7 +64,7 @@ stockfish_path = '/home/ec2-user/engines/Stockfish-sf_16.1/src/stockfish'
 #      |_|  |_| \___/  \__,_| \___||_|
 #
 
-model_path = os.path.join(weights_dir, 'chess-gpt-v3')
+model_path = os.path.join(weights_dir, 'chess-gpt-v6')
 
 # Small Model
 dense_dim_small = 4096  # 512 small, 2048 nominal
