@@ -15,8 +15,6 @@ import json
 import config
 import matplotlib.pyplot as plt
 import os
-from pymoo.indicators.hv import HV
-from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from tasks.AbstractTask import AbstractTask
 import scipy.signal
 from model import get_rl_models as get_model
@@ -566,7 +564,7 @@ class SelfPlayTask(AbstractTask):
     ])
     def _sample_actor(self, observation_input, inf_idx):
         # print('sampling actor', inf_idx)
-        pred_probs = self.c_actor(observation_input)
+        pred_probs, pred_values = self.c_actor(observation_input)
         pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
 
         # Batch sampling
@@ -587,7 +585,7 @@ class SelfPlayTask(AbstractTask):
     ])
     def _sample_actor_top_k(self, observation_input, inf_idx):
         # print('sampling actor', inf_idx)
-        pred_probs = self.c_actor(observation_input)
+        pred_probs, pred_vals = self.c_actor(observation_input)
         pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
 
         # Get top k moves
@@ -633,7 +631,7 @@ class SelfPlayTask(AbstractTask):
     ):
 
         with tf.GradientTape() as tape:
-            pred_probs = self.c_actor(observation_buffer)  # shape: (batch, seq_len, 2)
+            pred_probs, pred_vals = self.c_actor(observation_buffer)  # shape: (batch, seq_len, 2)
             pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
             pred_log_probs = tf.math.log(pred_probs)  # shape: (batch, seq_len, 2)
             logprobability = tf.reduce_sum(
@@ -667,7 +665,7 @@ class SelfPlayTask(AbstractTask):
         self.actor_optimizer.apply_gradients(zip(policy_grads, self.c_actor.trainable_variables))
 
         #  KL Divergence
-        pred_probs = self.c_actor(observation_buffer)
+        pred_probs, pred_vals = self.c_actor(observation_buffer)
         pred_probs = tf.nn.softmax(pred_probs, axis=-1)
         pred_log_probs = tf.math.log(pred_probs)
         logprobability = tf.reduce_sum(
@@ -786,11 +784,11 @@ class SelfPlayTask(AbstractTask):
 
 
 if __name__ == '__main__':
-    # actor_path = config.model_path
-    # critic_path = config.model_path
+    actor_path = config.model_path
+    critic_path = config.model_path
 
-    actor_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'actor_weights_150')
-    critic_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'critic_weights_150')
+    # actor_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'actor_weights_150')
+    # critic_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'critic_weights_150')
 
     # actor_path = None
     # critic_path = None
