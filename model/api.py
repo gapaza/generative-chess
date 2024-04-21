@@ -89,7 +89,7 @@ class ChessGPT_API:
         inf_idx = len(move_input) - 1
         print('Inference index:', inf_idx)
         move_input_encoded = tf.expand_dims(move_input_encoded, axis=0)  # Add batch dimension
-        pred_logits = self.model(move_input_encoded, training=False)
+        pred_logits, pred_val = self.model(move_input_encoded, training=False)
         move_probs = tf.nn.softmax(pred_logits, axis=-1)
         inf_move_probs = move_probs[:, inf_idx, :]
 

@@ -327,12 +327,13 @@ class AbstractEval:
 
         p_batches = tqdm(dataset, desc='Evaluating '+theme+'...')
         for input_sequences, label_sequences, piece_encodings, masks in p_batches:
-            if model.m_type == 'v1':
-                predictions, val_predictions = model(input_sequences, training=False)
-            elif model.m_type == 'v2':
-                predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
-            else:
-                raise ValueError('Invalid model type')
+            # if model.m_type == 'v1':
+            #     predictions, val_predictions = model(input_sequences, training=False)
+            # elif model.m_type == 'v2':
+            #     predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
+            # else:
+            #     raise ValueError('Invalid model type')
+            predictions, val_predictions = self.call_model(model, input_sequences, piece_encodings)
             accuracy_tracker.update_state(label_sequences, predictions, sample_weight=masks)
             if len(self.eval_history[theme]) > 0:
                 postfix_val = accuracy_tracker.result().numpy() - self.eval_history[theme][-1]
@@ -343,6 +344,18 @@ class AbstractEval:
         accuracy = accuracy_tracker.result().numpy()
         self.eval_history[theme].append(np.float64(accuracy))
         return np.float64(accuracy)
+
+
+
+    @tf.function
+    def call_model(self, model, input_sequences, piece_encodings):
+        if model.m_type == 'v1':
+            predictions, val_predictions = model(input_sequences, training=False)
+        elif model.m_type == 'v2':
+            predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
+        else:
+            raise ValueError('Invalid model type')
+        return predictions, val_predictions
 
 
     # ---------------------------------

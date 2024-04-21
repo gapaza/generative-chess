@@ -36,7 +36,7 @@ class RewardShaping:
 
 
     def game_reward_viz(self, uci_moves):
-        rewards, eval_history = calc_reward(self.engine, uci_moves)
+        rewards, eval_history = calc_reward(self.engine, uci_moves, n=200000)
 
         print('Rewards:', np.mean(rewards), rewards)
         returns = discounted_cumulative_sums(

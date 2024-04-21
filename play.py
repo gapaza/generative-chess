@@ -4,7 +4,7 @@ import os
 
 
 
-rl_model_path = os.path.join(config.results_dir, 'run_2', 'pretrained', 'actor_weights_250')
+rl_model_path = os.path.join(config.results_dir, 'run_7', 'pretrained', 'actor_weights_400')
 
 
 

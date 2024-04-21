@@ -6,7 +6,9 @@ import matplotlib.gridspec as gridspec
 from concurrent.futures import ProcessPoolExecutor
 #set multiprocessing type to fork
 import multiprocessing as mp
-mp.set_start_method('fork')
+# mp.set_start_method('fork')
+# mp.set_start_method('spawn', force=True)
+
 
 import random
 import math
@@ -22,10 +24,10 @@ from collections import OrderedDict
 import tensorflow_addons as tfa
 import chess
 import chess.engine
-from stockfish.rewards.reward_1 import calc_reward, calc_reward_batch
+from stockfish.rewards.reward_1 import calc_reward
 from evals.AbstractEval import AbstractEval
 from evals.plotting.training_comparison import plot_training_comparison
-
+from stockfish.rewards.RewardProcess import StockfishProcess
 
 def discounted_cumulative_sums(x, discount):
     # Discounted cumulative sums of vectors for computing rewards-to-go and advantage estimates
@@ -37,17 +39,17 @@ def id_seq_to_uci(seq):
 
 
 # Number of self-play games in a mini-batch
-global_mini_batch_size = 128
+global_mini_batch_size = 64
 
-
+run_evals = True
 use_actor_warmup = True
-critic_warmup_epochs = 0
+critic_warmup_epochs = 5
 
 
 pickup_epoch = 0
 
-run_dir = 5
-run_dir_itr = 0
+run_dir = 7
+run_dir_itr = 5
 
 top_k = None
 
@@ -89,15 +91,16 @@ class SelfPlayTask(AbstractTask):
         self.gamma = 0.99
         self.lam = 0.95
         self.clip_ratio = 0.2
-        self.target_kl = 0.0001  # was 0.01
-        self.entropy_coef = 0.02  # was 0.02 originally
+        self.target_kl = 0.0005  # was 0.0001
+        self.entropy_coef = 0.0005  # was 0.02 originally
         self.counter = 0
         self.game_start_token_id = config.start_token_id
         self.num_actions = config.vocab_size
         self.curr_epoch = 0
+        self.actor_updates = 0
 
         # Results
-        self.plot_freq = 5
+        self.plot_freq = 15
 
         # Pretrain save dir
         self.pretrain_save_dir = os.path.join(self.run_dir, 'pretrained')
@@ -108,21 +111,34 @@ class SelfPlayTask(AbstractTask):
 
         # Stockfish Engine
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
-        self.engine.configure({'Threads': 32, "Hash": 1024})
+        self.engine.configure({'Threads': 32, "Hash": 4096 * 2})
         self.nodes = 200000
         self.lines = 1
+
+        # self.num_engines = 4
+        # self.engine_workers = []
+        # self.engine_queues = []
+        # for _ in range(self.num_engines):
+        #     to_queue = mp.Queue()
+        #     from_queue = mp.Queue()
+        #     engine = StockfishProcess(to_queue, from_queue)
+        #     self.engine_workers.append(engine)
+        #     self.engine_queues.append((to_queue, from_queue))
+        #     engine.start()
+
+
+    def __del__(self):
+        for engine in self.engine_workers:
+            engine.terminate()
 
 
     def build(self):
 
         # Optimizer parameters
-        self.actor_learning_rate = 0.00001  # 0.0001
+        self.actor_learning_rate = 0.000001  # 0.0001
         self.critic_learning_rate = 0.0001  # 0.0001
         self.train_actor_iterations = 250  # was 250
         self.train_critic_iterations = 40  # was 40
-        self.beta_1 = 0.9
-        if self.run_val is False:
-            self.beta_1 = 0.0
 
         if use_actor_warmup is True:
             self.actor_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
@@ -132,18 +148,19 @@ class SelfPlayTask(AbstractTask):
                 warmup_target=self.actor_learning_rate,
                 warmup_steps=1000
             )
+
+
         self.critic_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
             0.0,  # initial learning rate
             1000,  # decay_steps
             alpha=1.0,
             warmup_target=self.critic_learning_rate,
-            warmup_steps=1000
+            warmup_steps=int(critic_warmup_epochs * (global_mini_batch_size * .75))
         )
 
         # Optimizers
         if self.actor_optimizer is None:
             # self.actor_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.actor_learning_rate)
-            # self.actor_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.actor_learning_rate, beta_1=self.beta_1)
             self.actor_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.actor_learning_rate)
         if self.critic_optimizer is None:
             # self.critic_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.critic_learning_rate)
@@ -217,6 +234,9 @@ class SelfPlayTask(AbstractTask):
         game_evals = [0.2 for x in range(self.mini_batch_size)] # Eval from white perspective
         action_mask = [[] for x in range(self.mini_batch_size)]
 
+        all_logprobs_full = [[] for _ in range(self.mini_batch_size)]  # Logprobs for all actions
+        all_probs_full = [[] for _ in range(self.mini_batch_size)]
+
         # -------------------------------------
         # Sample Actor
         # -------------------------------------
@@ -226,19 +246,20 @@ class SelfPlayTask(AbstractTask):
 
 
             # Sample the actor
-            if top_k is None:
-                action_log_prob, action, all_action_probs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
-            else:
-                topk_action_log_prob, topk_action, topk_action_probs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
-                topk_action_log_prob, topk_action = topk_action_log_prob.numpy().tolist(), topk_action.numpy().tolist()
-                action_log_prob, action = [], []
-                for idx in range(self.mini_batch_size):
-                    # Get top actions for batch element
-                    # print('Top Actions:', topk_action[idx], id_seq_to_uci(topk_action[idx]))
-                    sample_action, sample_action_prob = self.sample_actions(boards[idx], topk_action[idx], topk_action_log_prob[idx])
-                    action.append(sample_action)
-                    action_log_prob.append(sample_action_prob)
-
+            # if top_k is None:
+            action_log_prob, action, all_action_probs, batch_logprobs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
+            # else:
+            #     topk_action_log_prob, topk_action, topk_action_probs, batch_logprobs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
+            #     topk_action_log_prob, topk_action = topk_action_log_prob.numpy().tolist(), topk_action.numpy().tolist()
+            #     action_log_prob, action = [], []
+            #     for idx in range(self.mini_batch_size):
+            #         # Get top actions for batch element
+            #         # print('Top Actions:', topk_action[idx], id_seq_to_uci(topk_action[idx]))
+            #         sample_action, sample_action_prob = self.sample_actions(boards[idx], topk_action[idx], topk_action_log_prob[idx])
+            #         action.append(sample_action)
+            #         action_log_prob.append(sample_action_prob)
+            # all_action_log_probs = all_action_log_probs.numpy().tolist()
+            # all_action_probs = all_action_probs.numpy().tolist()
 
             # Update the game state
             observation_new = deepcopy(observation)
@@ -325,32 +346,41 @@ class SelfPlayTask(AbstractTask):
                 trajectory += [0] * (config.seq_length - len(trajectory))
 
 
-
+        print('\nGen time:', time.time() - curr_time)
         # -------------------------------------
         # Post process rewards
         # -------------------------------------
         curr_time_2 = time.time()
 
-        # Batch games
-        # batch_size = 8
+        # --- Batch Eval
+        # num_batches = self.num_engines - 1
+        # batch_size = global_mini_batch_size // num_batches
         # batches = [games[i:i + batch_size] for i in range(0, len(games), batch_size)]
-        # print('STARTING BATCHES:', len(batches))
-        # with ProcessPoolExecutor(max_workers=4) as executor:
-        #     batch_results = list(executor.map(calc_reward_batch, batches))
+        #
+        # # Put the batches into the engine queues
+        # # print('--> PUTTING BATCHES INTO QUEUES')
+        # for idx, batch in enumerate(batches):
+        #     to_queue = self.engine_queues[idx][0]
+        #     to_queue.put(batch)
+        #
+        # # Get the results from the engine queues
         # all_rewards_post = []
-        # for result in batch_results:
-        #     all_rewards_post += result
+        # for to_queue, from_queue in self.engine_queues:
+        #     # print('Waiting on queue')
+        #     results = from_queue.get(timeout=60)
+        #     all_rewards_post.extend(results)
 
-
+        # --- Linear Eval
         for idx, game in enumerate(games):
             uci_game = ' '.join([config.id2token[x] for x in game])
-            reward = calc_reward(self.engine, uci_game)
+            reward = calc_reward(self.engine, uci_game, n=self.nodes)
             all_rewards_post[idx] = reward
 
 
+
+
         batch_total_eval_time = time.time() - curr_time_2
-        sample_time = time.time() - curr_time - batch_total_eval_time
-        print('\nGen time:', sample_time, 'Eval time:', batch_total_eval_time)
+        print('Eval time:', batch_total_eval_time)
 
 
 
@@ -434,6 +464,7 @@ class SelfPlayTask(AbstractTask):
             policy_loss = policy_loss.numpy()
             actor_loss = actor_loss.numpy()
 
+        self.actor_updates += policy_update_itr
         print('Actor time:', time.time() - curr_time, 'seconds')
 
         # -------------------------------------
@@ -585,7 +616,7 @@ class SelfPlayTask(AbstractTask):
 
         actions = next_bit_ids  # (batch,)
         actions_log_prob = next_bit_probs  # (batch,)
-        return actions_log_prob, actions, all_token_probs
+        return actions_log_prob, actions, all_token_probs, all_token_log_probs
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
@@ -722,7 +753,7 @@ class SelfPlayTask(AbstractTask):
                     print(f"{key}: {value}", end=' | ')
                 else:
                     print("%s: %.5f" % (key, value), end=' | ')
-            print('')
+            print('| actor_updates:', self.actor_updates)
 
 
         # Update metrics
@@ -741,10 +772,13 @@ class SelfPlayTask(AbstractTask):
             return
 
     def run_evals(self):
+        if run_evals is False:
+            return
         evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
-        eval_history = self.eval.run_eval(self.c_critic, themes=evals)
+        eval_history = self.eval.run_eval(self.c_actor, themes=evals)
         eval_history['step_interval'] = global_mini_batch_size
-        plot_training_comparison([eval_history], bounds=False, save_name='evals.png', local_save_dir=self.run_dir)
+        save_name = 'evals_val_' + str(self.val_itr) + '.png'
+        plot_training_comparison([eval_history], bounds=False, save_name=save_name, local_save_dir=self.run_dir)
 
 
     def plot_ppo(self):
@@ -810,7 +844,7 @@ if __name__ == '__main__':
     task = SelfPlayTask(
         run_num=run_dir,
         problem=None,
-        epochs=500,
+        epochs=100000,
         actor_load_path=actor_path,
         critic_load_path=critic_path,
         debug=True,

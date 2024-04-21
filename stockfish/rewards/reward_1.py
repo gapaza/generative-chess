@@ -1,10 +1,11 @@
 import config
 import chess
+import chess.engine
 from multiprocessing import Process, Queue
 from stockfish.utils import get_stockfish
 
 # Game is a string of UCI moves
-def calc_reward(engine, game):
+def calc_reward(engine, game, n=100000):
     uci_moves = game.split(' ')
     rewards = []  # Always from white's perspective
     pad_len = config.seq_length - 1
@@ -68,7 +69,7 @@ def calc_reward(engine, game):
         # -------------------------------------
         # Engine-based reward
         # -------------------------------------
-        nodes = 100000
+        nodes = n
         analysis = engine.analyse(board, chess.engine.Limit(nodes=nodes), multipv=1)
         top_line = analysis[0]
         top_line_score = top_line["score"]
@@ -131,17 +132,15 @@ def calc_reward(engine, game):
 
 
 
-def calc_reward_batch(games_uci):
+def calc_reward_batch(games_uci, engine, n=100000):
     games = []
     for uci_game in games_uci:
         game = [config.id2token[token] for token in uci_game]
         game = ' '.join(game)
         games.append(game)
-    engine = get_stockfish()
-    print('STOCKFISH ENGINE LOADED')
     rewards = []
     for game in games:
-        rewards.append(calc_reward(engine, game))
+        rewards.append(calc_reward(engine, game, n=n))
     return rewards
 
 
