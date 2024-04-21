@@ -20,11 +20,11 @@ from model import get_pretrain_model as get_model
 # from model import get_pretrain_model_v2 as get_model
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'games-puzzles-128b')
+curr_dataset = os.path.join(config.datasets_dir, 'lc0-games-puzzles-128b')
 
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-v6')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-s')
 
 load_model = None
 # load_model = curr_model
@@ -47,12 +47,23 @@ def train():
     checkpoints = get_checkpoints(save_model)
 
     # 6. Train Model
-    history = model.fit(
-        train_dataset,
-        epochs=config.epochs,
-        validation_data=val_dataset,
-        callbacks=checkpoints
-    )
+    if config.distributed is True:
+        steps_per_epoch, validation_steps = calc_dataset_cardinality()
+        model.fit(
+            train_dataset,
+            epochs=config.epochs,
+            validation_data=val_dataset,
+            steps_per_epoch=steps_per_epoch,
+            validation_steps=validation_steps,
+            callbacks=checkpoints
+        )
+    else:
+        history = model.fit(
+            train_dataset,
+            epochs=config.epochs,
+            validation_data=val_dataset,
+            callbacks=checkpoints
+        )
 
     # Save history to file
     history_path = os.path.join(config.results_dir, 'history.txt')
@@ -71,14 +82,22 @@ def train():
 #                   |_|
 #
 
+def calc_dataset_cardinality():
+    curr_batch_size = 128
+    curr_cardinality = 143801
+    new_batch_size = config.global_batch_size
+    new_cardinality = (curr_cardinality * curr_batch_size) // new_batch_size
+    curr_val_cardinality = 9660
+    new_val_cardinality = (curr_val_cardinality * curr_batch_size) // new_batch_size
+    return new_cardinality, new_val_cardinality
 
 def get_dataset():
     dataset_generator = PTP_DatasetGenerator(curr_dataset)
     train_dataset, val_dataset = dataset_generator.load_datasets()
 
     if config.distributed is True:
-        train_dataset = train_dataset.rebatch(train_dataset, config.global_batch_size)
-        val_dataset = val_dataset.rebatch(val_dataset, config.global_batch_size)
+        train_dataset = train_dataset.rebatch(config.global_batch_size, drop_remainder=True)
+        val_dataset = val_dataset.rebatch(config.global_batch_size, drop_remainder=True)
         train_dataset = config.mirrored_strategy.experimental_distribute_dataset(train_dataset)
         val_dataset = config.mirrored_strategy.experimental_distribute_dataset(val_dataset)
         print('-- Distributed Training Enabled --')
@@ -87,7 +106,10 @@ def get_dataset():
 
 
 def get_optimizer():
+
     jit_compile = False
+
+
     learning_rate = 0.0005  # --> 0.00005
     learning_rate = tf.keras.optimizers.schedules.CosineDecay(
         0.0,
@@ -96,8 +118,20 @@ def get_optimizer():
         warmup_target=learning_rate,
         warmup_steps=1000
     )
-    # learning_rate = 0.000025
+
+    # learning_rate = 0.005  # --> 0.00005
+    # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+    #     0.0,
+    #     10000,
+    #     alpha=0.1,
+    #     warmup_target=learning_rate,
+    #     warmup_steps=100
+    # )
+
+
     optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learning_rate)
+    # optimizer = tfa.optimizers.LAMB(learning_rate=learning_rate)
+
     if config.mixed_precision is True:
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
     return optimizer, jit_compile
@@ -112,9 +146,9 @@ def get_checkpoints(checkpoint_path):
         mode='min',
         save_best_only=True
     )
-    eval_callback = EvalsCallback(2000, checkpoint_path)
     checkpoints.append(model_checkpoint)
-    checkpoints.append(eval_callback)
+    # eval_callback = EvalsCallback(2000, checkpoint_path)
+    # checkpoints.append(eval_callback)
     return checkpoints
 
 

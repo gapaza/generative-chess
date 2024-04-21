@@ -68,6 +68,7 @@ class ChessGPT(tf.keras.Model):
         # self.decoder_18 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
 
 
+
         # Move Prediction Head
         self.move_prediction_head = keras.layers.Dense(
             config.vocab_size,
@@ -171,11 +172,13 @@ class ChessGPT(tf.keras.Model):
         with tf.GradientTape() as tape:
             # Forward Pass
             predictions, val_predcitions = self(input_sequences, training=True)
-            uloss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
+            buloss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
 
             # DISTRIBUTED TRAINING
             if config.distributed is True:
-                uloss = tf.nn.compute_average_loss(uloss, global_batch_size=config.global_batch_size)
+                uloss = tf.nn.compute_average_loss(buloss, global_batch_size=config.global_batch_size)
+            else:
+                uloss = buloss
 
             # Mixed Precision
             if config.mixed_precision is True:
@@ -189,7 +192,7 @@ class ChessGPT(tf.keras.Model):
             gradients = self.optimizer.get_unscaled_gradients(gradients)
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
-        self.pt_loss_tracker.update_state(uloss)
+        self.pt_loss_tracker.update_state(buloss)
         self.pt_perplexity_tracker.update_state(target_sequences, predictions, sample_weight=masks)
 
         return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result()}

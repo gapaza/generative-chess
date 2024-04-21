@@ -6,17 +6,17 @@ import platform
 
 
 # Tensorflow Core
-mixed_precision = False
+mixed_precision = True
 if platform.system() != 'Darwin':
     if mixed_precision is True:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_pobalicy(policy)
+        tf.keras.mixed_precision.set_global_policy(policy)
 else:
     tf.config.set_visible_devices([], 'GPU')
 
 
 # Distributed Training
-distributed = False
+distributed = True
 mirrored_strategy = tf.distribute.MirroredStrategy()
 
 
@@ -64,7 +64,7 @@ stockfish_path = '/home/ubuntu/engines/Stockfish-sf_16.1/src/stockfish'
 #      |_|  |_| \___/  \__,_| \___||_|
 #
 
-model_path = os.path.join(weights_dir, 'chess-gpt-v6')
+model_path = os.path.join(weights_dir, 'chess-gpt-s')
 
 # Small Model
 dense_dim_small = 4096  # 512 small, 2048 nominal
@@ -85,7 +85,7 @@ seq_length = 128  # 128 nominal
 dropout = 0.1
 
 # --> Training
-pt_dataset = os.path.join(datasets_dir, 'games-puzzles-128b')
+pt_dataset = os.path.join(datasets_dir, 'lc0-games-puzzles-128b')
 epochs = 200
 global_batch_size = 128  # 64, 128, 256, 512, 1024
 
