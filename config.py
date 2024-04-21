@@ -14,6 +14,9 @@ if platform.system() != 'Darwin':
 else:
     tf.config.set_visible_devices([], 'GPU')
 
+# Print available devices
+print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
+
 
 # Distributed Training
 distributed = True
@@ -87,7 +90,7 @@ dropout = 0.1
 # --> Training
 pt_dataset = os.path.join(datasets_dir, 'lc0-games-puzzles-128b')
 epochs = 200
-global_batch_size = 128  # 64, 128, 256, 512, 1024
+global_batch_size = 128 * 16  # 64, 128, 256, 512, 1024
 
 
 

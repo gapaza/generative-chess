@@ -21,7 +21,7 @@ from model import get_pretrain_model as get_model
 
 # curr_dataset = config.pt_dataset
 curr_dataset = os.path.join(config.datasets_dir, 'lc0-games-puzzles-128b')
-
+# curr_dataset = os.path.join(config.datasets_dir, 'games-puzzles-128b')
 
 # save_model = config.model_path
 save_model = os.path.join(config.weights_dir, 'chess-gpt-s')
@@ -65,6 +65,7 @@ def train():
             callbacks=checkpoints
         )
 
+
     # Save history to file
     history_path = os.path.join(config.results_dir, 'history.txt')
     with open(history_path, 'w') as f:
@@ -84,7 +85,7 @@ def train():
 
 def calc_dataset_cardinality():
     curr_batch_size = 128
-    curr_cardinality = 143801
+    curr_cardinality = 143801  # 143801
     new_batch_size = config.global_batch_size
     new_cardinality = (curr_cardinality * curr_batch_size) // new_batch_size
     curr_val_cardinality = 9660
@@ -110,23 +111,23 @@ def get_optimizer():
     jit_compile = False
 
 
-    learning_rate = 0.0005  # --> 0.00005
-    learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-        0.0,
-        100000,
-        alpha=0.1,
-        warmup_target=learning_rate,
-        warmup_steps=1000
-    )
-
-    # learning_rate = 0.005  # --> 0.00005
+    # learning_rate = 0.0005  # --> 0.00005
     # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
     #     0.0,
-    #     10000,
+    #     100000,
     #     alpha=0.1,
     #     warmup_target=learning_rate,
-    #     warmup_steps=100
+    #     warmup_steps=1000
     # )
+
+    learning_rate = 0.001  # --> 0.00005
+    learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+        0.0,
+        10000,
+        alpha=0.1,
+        warmup_target=learning_rate,
+        warmup_steps=200
+    )
 
 
     optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learning_rate)

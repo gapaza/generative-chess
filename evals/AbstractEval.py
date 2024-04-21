@@ -209,8 +209,8 @@ class AbstractEval:
         dataset = tf.data.Dataset.from_tensor_slices(
             (input_sequences, label_sequences, piece_encodings, masks)
         )
-        dataset = dataset.batch(len(puzzles))
-        # dataset = dataset.batch(256)
+        # dataset = dataset.batch(len(puzzles))
+        dataset = dataset.batch(256)
         dataset = dataset.map(encode_moves, num_parallel_calls=tf.data.AUTOTUNE)
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
