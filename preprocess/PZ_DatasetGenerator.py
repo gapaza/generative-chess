@@ -29,11 +29,13 @@ def worker(puzzle):
 # Datasets
 # - games-128b
 # - puzzles-128b
-# - games-puzzles-128b
+# - games-puzzles-128b (63333)
+# - lc0-128b (80468)
+# - lc0-games-puzzles-128b (143801)
 
 small_ds = False
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'games-puzzles-128b')
+curr_dataset = os.path.join(config.datasets_dir, 'lc0-games-puzzles-128b')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -41,15 +43,17 @@ if not os.path.exists(curr_dataset):
 # ------------------------------
 # UCI Games
 # ------------------------------
-use_games = True
+use_games = False
 uci_dir = os.path.join(config.games_dir, 'combined')
 uci_piece_dir = os.path.join(config.games_dir, 'combined_piece')
 
+use_lc0_games = True
+lc0_dir = os.path.join(config.games_dir, 'lc0')
 
 # ------------------------------
 # Puzzles
 # ------------------------------
-use_puzzles = True
+use_puzzles = False
 puzzles_dir = os.path.join(config.datasets_dir, 'evals', 'train', 'puzzles.pkl')
 
 
@@ -64,6 +68,9 @@ class PZ_DatasetGenerator:
         self.chunk_uci_dir = uci_dir
         self.chunk_san_dir = os.path.join(self.dataset_dir, 'chunks_san')
         self.chunk_size = 100000
+
+        # Lc0 games
+        self.lc0_dir = lc0_dir
 
         self.train_dataset_dir = os.path.join(self.dataset_dir, 'train_dataset')
         self.val_dataset_dir = os.path.join(self.dataset_dir, 'val_dataset')
@@ -87,19 +94,25 @@ class PZ_DatasetGenerator:
             return
 
         move_files, piece_files = self.load_uci_files()
+        lc0_files = self.load_lc0_files()
 
         if small:
             move_files = move_files[:6]
             piece_files = piece_files[:6]
+            lc0_files = lc0_files[:6]
 
         # zip files
         files = list(zip(move_files, piece_files))
 
         # shuffle files
         random.shuffle(files)
+        random.shuffle(lc0_files)
 
         train_files = files[:int(len(files) * 0.94)]
         val_files = files[int(len(files) * 0.94):]
+
+        train_lc0_files = lc0_files[:int(len(lc0_files) * 0.94)]
+        val_lc0_files = lc0_files[int(len(lc0_files) * 0.94):]
 
         train_move_files, train_piece_files = zip(*train_files)
         val_move_files, val_piece_files = zip(*val_files)
@@ -111,9 +124,9 @@ class PZ_DatasetGenerator:
 
 
         print("Parsing train dataset...")
-        train_dataset = self.parse_dataset(train_move_files, train_piece_files, train_puzzles, train=True)
+        train_dataset = self.parse_dataset(train_move_files, train_piece_files, train_puzzles, train_lc0_files, train=True)
         print("Parsing val dataset...")
-        val_dataset = self.parse_dataset(val_move_files, val_piece_files, val_puzzles, train=False)
+        val_dataset = self.parse_dataset(val_move_files, val_piece_files, val_puzzles, val_lc0_files, train=False)
 
         if save:
             self.save_datasets(train_dataset, val_dataset)
@@ -121,7 +134,9 @@ class PZ_DatasetGenerator:
         return train_dataset, val_dataset
 
 
-    def parse_dataset(self, move_files, piece_files, puzzles, train=True):
+    def parse_dataset(self, move_files, piece_files, puzzles, lc0_puzzles, train=True):
+        uci_dataset = None
+
 
         # 1. UCI Games
         if use_games is True:
@@ -136,7 +151,21 @@ class PZ_DatasetGenerator:
         else:
             uci_dataset = None
 
-        # 2. Process puzzles (if applicable)
+
+
+        # 2. LC0 Games
+        if use_lc0_games is True:
+            lc0_dataset = tf.data.TextLineDataset(lc0_puzzles)
+            lc0_dataset = lc0_dataset.batch(config.global_batch_size, drop_remainder=True)
+            lc0_dataset = lc0_dataset.map(language_modeling.preprocess_lc0_batch, num_parallel_calls=tf.data.AUTOTUNE)
+            if uci_dataset is not None:
+                uci_dataset = uci_dataset.concatenate(lc0_dataset)
+            else:
+                uci_dataset = lc0_dataset
+
+
+
+        # 3. Process puzzles (if applicable)
         if use_puzzles is True:
             puzzle_dataset = self.process_puzzles(puzzles)
             print('Finished processing puzzles')
@@ -159,6 +188,9 @@ class PZ_DatasetGenerator:
         else:
             combined_dataset = uci_dataset
 
+
+
+
         combined_dataset = combined_dataset.prefetch(tf.data.AUTOTUNE)
         return combined_dataset
 
@@ -176,6 +208,14 @@ class PZ_DatasetGenerator:
                 move_files.append(full_path)
                 piece_files.append(piece_path)
         return move_files, piece_files
+
+    def load_lc0_files(self):
+        move_files = []
+        for file in os.listdir(self.lc0_dir):
+            if file.endswith('.txt'):
+                full_path = os.path.join(self.lc0_dir, file)
+                move_files.append(full_path)
+        return move_files
 
     def parse_piece_vectors(self, text_dataset):
         num_proc = 12
@@ -249,6 +289,36 @@ class PZ_DatasetGenerator:
     ### Load / Save ###
     ###################
 
+    def integrate_datasets(self, other_datasets):
+        train_dataset = None
+        val_dataset = None
+        for other_dataset in other_datasets:
+            t_dataset, v_dataset = PZ_DatasetGenerator(other_dataset).load_datasets()
+            if train_dataset is None and val_dataset is None:
+                train_dataset = t_dataset
+                val_dataset = v_dataset
+                continue
+            train_dataset = train_dataset.concatenate(t_dataset)
+            val_dataset = val_dataset.concatenate(v_dataset)
+
+        # Shuffle and rebatch
+        print('Shuffling and rebatching')
+        train_dataset = train_dataset.rebatch(1, drop_remainder=True)
+        train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
+        print('Saving intermediate dataset')
+        train_dataset.save(self.intermediate_dir)
+        train_dataset = tf.data.Dataset.load(self.intermediate_dir)
+        cardinality = tf.data.experimental.cardinality(train_dataset).numpy()
+        print('Shuffling and rebatching')
+        train_dataset = train_dataset.shuffle(cardinality)
+        train_dataset = train_dataset.rebatch(config.global_batch_size, drop_remainder=True)
+
+        self.save_datasets(train_dataset, val_dataset)
+
+
+
+
+
     def save_datasets(self, train_dataset, val_dataset):
         print("Saving train dataset...")
         train_dataset.save(self.train_dataset_dir)
@@ -296,9 +366,14 @@ class PZ_DatasetGenerator:
             piece_tensor_game = piece_tensor[0]
             print('----------> Piece tensor:', piece_tensor_game)
 
+            label_list = label_tensor.numpy().tolist()
+            label_game = label_list[0]
+            label_game_tokens = [config.id2token[i] for i in label_game]
+            print('--> Label game token ids:', label_game)
+
             mask = mask.numpy().tolist()
             mask_game = mask[0]
-            print('------------------> Mask:', mask_game)
+            print('--------> Sample Weights:', mask_game)
             print('\n')
 
             if idx > 20:
@@ -311,11 +386,21 @@ class PZ_DatasetGenerator:
 if __name__ == '__main__':
 
     generator = PZ_DatasetGenerator(curr_dataset)
-    dataset = generator.get_dataset(save=True, small=small_ds)
+
+
+
+    # datasets = [
+    #     os.path.join(config.datasets_dir, 'games-puzzles-128b'),
+    #     os.path.join(config.datasets_dir, 'lc0-128b')
+    # ]
+    # generator.integrate_datasets(datasets)
+
+
+    # dataset = generator.get_dataset(save=True, small=small_ds)
     # generator.get_num_batches()
     # dataset_train, dataset_val = generator.load_datasets()
 
-    # generator.debug_dataset()
+    generator.debug_dataset()
 
 
 

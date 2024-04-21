@@ -10,7 +10,7 @@ mixed_precision = False
 if platform.system() != 'Darwin':
     if mixed_precision is True:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_policy(policy)
+        tf.keras.mixed_precision.set_global_pobalicy(policy)
 else:
     tf.config.set_visible_devices([], 'GPU')
 

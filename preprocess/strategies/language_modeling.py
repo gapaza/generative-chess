@@ -189,6 +189,38 @@ def preprocess_decoder_batch_piece_sample_weights(moves, pieces):
 
 
 
+def preprocess_lc0_batch(moves):
+    # 1. Encode moves
+    encoded_moves = config.encode_tf(moves)
+    # print('Encoded Moves', encoded_moves)
+
+    # 2. Create move inputs
+    encoded_shape = tf.shape(encoded_moves)
+    batch_size = encoded_shape[0]
+    seq_length = encoded_shape[1]
+    start_token = tf.fill([batch_size, 1], config.start_token_id)
+    encoded_inputs = tf.concat([start_token, encoded_moves], axis=1)
+    encoded_inputs = encoded_inputs[:, :seq_length]
+
+    # 3. Create move labels
+    encoded_labels = encoded_moves
+
+    # 4. Mock pieces tensor
+    pieces = tf.zeros_like(encoded_labels, dtype=tf.int16)
+
+    # Optionally cast to int16 to save memory
+    encoded_inputs = tf.cast(encoded_inputs, tf.int16)
+    encoded_labels = tf.cast(encoded_labels, tf.int16)
+
+    # 5. Create sample weights
+    # Sample weights are 1 for all encoded_labels except for padding token (idx 0)
+    sample_weights = tf.cast(tf.not_equal(encoded_labels, 0), tf.float16)
+
+    return encoded_inputs, encoded_labels, pieces, sample_weights
+
+
+
+
 
 
 
