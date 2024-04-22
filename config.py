@@ -6,7 +6,7 @@ import platform
 
 
 # Tensorflow Core
-mixed_precision = True
+mixed_precision = False
 if platform.system() != 'Darwin':
     if mixed_precision is True:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
@@ -19,7 +19,7 @@ print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('
 
 
 # Distributed Training
-distributed = True
+distributed = False
 mirrored_strategy = tf.distribute.MirroredStrategy()
 
 

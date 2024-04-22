@@ -39,17 +39,16 @@ def id_seq_to_uci(seq):
 
 
 # Number of self-play games in a mini-batch
-global_mini_batch_size = 64
+global_mini_batch_size = 128
 
 run_evals = True
 use_actor_warmup = True
 critic_warmup_epochs = 5
 
-
 pickup_epoch = 0
 
-run_dir = 7
-run_dir_itr = 5
+run_dir = 8
+run_dir_itr = 1
 
 top_k = None
 
@@ -100,7 +99,7 @@ class SelfPlayTask(AbstractTask):
         self.actor_updates = 0
 
         # Results
-        self.plot_freq = 15
+        self.plot_freq = 10
 
         # Pretrain save dir
         self.pretrain_save_dir = os.path.join(self.run_dir, 'pretrained')
@@ -112,7 +111,7 @@ class SelfPlayTask(AbstractTask):
         # Stockfish Engine
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
         self.engine.configure({'Threads': 32, "Hash": 4096 * 2})
-        self.nodes = 200000
+        self.nodes = 100000
         self.lines = 1
 
         # self.num_engines = 4
@@ -127,15 +126,15 @@ class SelfPlayTask(AbstractTask):
         #     engine.start()
 
 
-    def __del__(self):
-        for engine in self.engine_workers:
-            engine.terminate()
+    # def __del__(self):
+    #     for engine in self.engine_workers:
+    #         engine.terminate()
 
 
     def build(self):
 
         # Optimizer parameters
-        self.actor_learning_rate = 0.000001  # 0.0001
+        self.actor_learning_rate = 0.0000025  # 0.0001
         self.critic_learning_rate = 0.0001  # 0.0001
         self.train_actor_iterations = 250  # was 250
         self.train_critic_iterations = 40  # was 40

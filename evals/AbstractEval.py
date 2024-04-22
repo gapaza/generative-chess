@@ -209,8 +209,8 @@ class AbstractEval:
         dataset = tf.data.Dataset.from_tensor_slices(
             (input_sequences, label_sequences, piece_encodings, masks)
         )
-        # dataset = dataset.batch(len(puzzles))
-        dataset = dataset.batch(256)
+        dataset = dataset.batch(len(puzzles))
+        # dataset = dataset.batch(256)
         dataset = dataset.map(encode_moves, num_parallel_calls=tf.data.AUTOTUNE)
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
@@ -418,17 +418,17 @@ if __name__ == '__main__':
 
     # checkpoint_path = config.model_path
 
-    model_name = 'chess-gpt-v3'
+    model_name = 'chess-gpt-v6'
     checkpoint_path = os.path.join(config.weights_dir, model_name)
     model = get_model(checkpoint_path=checkpoint_path)
 
     ae = AbstractEval()
 
 
-    # results = ae.run_eval(model, themes=evals)
-    # f_path = os.path.join(config.results_dir, 'evals', 'chess-gpt-v3.json')
-    # with open(f_path, 'w') as f:
-    #     json.dump(results, f, indent=4)
+    results = ae.run_eval(model, themes=evals)
+    f_path = os.path.join(config.results_dir, 'evals', 'chess-gpt-m.json')
+    with open(f_path, 'w') as f:
+        json.dump(results, f, indent=4)
 
 
     # compare_files = ['chess-gpt-v4-1', 'chess-gpt-v4-2', 'chess-gpt-v3']

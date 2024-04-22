@@ -106,8 +106,17 @@ def calc_reward(engine, game, n=100000):
         if eval_type[-1] == 'mtm':
             # For prev_eval, use the last value of eval_history that is of type eval in eval_type
             prev_eval = 0.0
-        reward_diff = abs(new_eval - prev_eval) / eval_norm
 
+
+        # # Pure positional evaluation
+        # eval_history.append(new_eval)
+        # eval_type.append('eval')
+        # move_reward = new_eval / 10.0
+        # rewards.append(move_reward)
+
+
+        # Difference in eval w.r.t. previous eval
+        reward_diff = abs(new_eval - prev_eval) / eval_norm
         if white_turn is True:
             if prev_eval > new_eval:  # Position worsened for white
                 move_reward = reward_center - reward_diff
@@ -121,6 +130,8 @@ def calc_reward(engine, game, n=100000):
         eval_history.append(new_eval)
         eval_type.append('eval')
         rewards.append(move_reward)
+
+
 
     # Pad rewards to seq_length
     if len(rewards) < pad_len:
