@@ -67,7 +67,7 @@ stockfish_path = '/home/ubuntu/engines/Stockfish-sf_16.1/src/stockfish'
 #      |_|  |_| \___/  \__,_| \___||_|
 #
 
-model_path = os.path.join(weights_dir, 'chess-gpt-s')
+model_path = os.path.join(weights_dir, 'chess-gpt-v6')
 
 # Small Model
 dense_dim_small = 4096  # 512 small, 2048 nominal
@@ -88,9 +88,9 @@ seq_length = 128  # 128 nominal
 dropout = 0.1
 
 # --> Training
-pt_dataset = os.path.join(datasets_dir, 'lc0-games-puzzles-128b')
+pt_dataset = os.path.join(datasets_dir, 'games-puzzles-128b')
 epochs = 200
-global_batch_size = 128 * 16  # 64, 128, 256, 512, 1024
+global_batch_size = 128 * 16 # 64, 128, 256, 512, 1024
 
 
 

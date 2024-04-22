@@ -202,11 +202,13 @@ class ChessGPT(tf.keras.Model):
         # input_sequences, target_sequences, piece_types = inputs
         input_sequences, target_sequences, piece_types, masks = inputs
         predictions, val_predcitions = self(input_sequences, training=False)
-        loss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
+        bloss = self.pt_loss_fn(target_sequences, predictions, sample_weight=masks)
 
         # DISTRIBUTED TRAINING
         if config.distributed is True:
-            loss = tf.nn.compute_average_loss(loss, global_batch_size=config.global_batch_size)
+            loss = tf.nn.compute_average_loss(bloss, global_batch_size=config.global_batch_size)
+        else:
+            loss = bloss
 
         self.pt_loss_tracker.update_state(loss)
         self.pt_perplexity_tracker.update_state(target_sequences, predictions, sample_weight=masks)
