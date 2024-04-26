@@ -19,7 +19,7 @@ print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('
 
 
 # Distributed Training
-distributed = False
+distributed = True
 mirrored_strategy = tf.distribute.MirroredStrategy()
 
 
@@ -76,7 +76,7 @@ embed_dim_small = 1024   # 128 small, 512 nominal
 num_experts_small = 2   # 2 small, 8 nominal
 
 # Regular Model
-dense_dim = 2048  # 512 small, 2048 nominal
+dense_dim = 4096  # 512 small, 2048 nominal
 heads = 8         # 2 small, 8 nominal
 embed_dim = 512   # 128 small, 512 nominal
 num_experts = 8   # 2 small, 8 nominal
@@ -85,12 +85,12 @@ num_experts = 8   # 2 small, 8 nominal
 seq_length = 128  # 128 nominal
 
 # --> Dropout
-dropout = 0.0
+dropout = 0.1
 
 # --> Training
-pt_dataset = os.path.join(datasets_dir, 'games-puzzles-128b')
+pt_dataset = os.path.join(datasets_dir, 'games-a2-full-128b')
 epochs = 200
-global_batch_size = 128  # 64, 128, 256, 512, 1024
+global_batch_size = 128 * 16  # 64, 128, 256, 512, 1024
 
 
 

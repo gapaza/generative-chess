@@ -19,10 +19,10 @@ from preprocess.PTP_DatasetGenerator import PTP_DatasetGenerator
 from model import get_pretrain_model_a2 as get_model
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'games-a2-128b')
+curr_dataset = os.path.join(config.datasets_dir, 'games-a2-full-128b')
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-a2')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-a3')
 
 load_model = None
 # load_model = curr_model
