@@ -53,3 +53,21 @@ pin        0.497
 
 
 
+
+
+Evaluating opening...: 100%|██████████| 10/10 [00:02<00:00,  3.70it/s, result=0.327]
+Evaluating middlegame...: 100%|██████████| 10/10 [00:00<00:00, 43.63it/s, result=0.281]
+Evaluating endgame...: 100%|██████████| 10/10 [00:00<00:00, 44.48it/s, result=0.23]
+Evaluating equality...: 100%|██████████| 9/9 [00:00<00:00, 14.80it/s, result=0.324]
+Evaluating advantage...: 100%|██████████| 10/10 [00:00<00:00, 42.75it/s, result=0.299]
+Evaluating mate...: 100%|██████████| 10/10 [00:00<00:00, 42.28it/s, result=0.167]
+Evaluating fork...: 100%|██████████| 10/10 [00:00<00:00, 42.52it/s, result=0.235]
+Evaluating pin...: 100%|██████████| 10/10 [00:00<00:00, 46.38it/s, result=0.239]
+
+
+
+
+
+
+
+
