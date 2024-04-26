@@ -7,6 +7,16 @@ This project exists on two servers
 
 
 
+### ChessGPT-v6-puzzle
+opening    0.749, 0.754, 0.756, 0.762, 0.782
+middlegame 0.652, 0.655, 0.663, 0.666, 0.681
+endgame    0.663, 0.669, 0.673, 0.675, 0.685
+equality   0.584, 0.589, 0.593, 0.596, 0.626
+advantage  0.610, 0.613, 0.616, 0.618, 0.622
+mate       0.764, 0.769, 0.779, 0.786, 0.808
+fork       0.653, 0.661, 0.670, 0.673, 0.695
+pin        0.593, 0.600, 0.606, 0.609, 0.672
+
 
 ### ChessGPT-v6
 opening    0.721
@@ -39,7 +49,6 @@ advantage  0.546
 mate       0.609
 fork       0.572
 pin        0.497
-
 
 
 

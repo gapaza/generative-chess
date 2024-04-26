@@ -37,8 +37,10 @@ class AbstractTask:
 
         # Optimizers and models initialized when new process is created
         self.actor_optimizer = None
+        self.actor_optimizer_2 = None
         self.critic_optimizer = None
         self.c_actor = None
+        self.c_actor_2 = None
         self.c_critic = None
 
         # Logging

@@ -24,7 +24,10 @@ from collections import OrderedDict
 import tensorflow_addons as tfa
 import chess
 import chess.engine
-from stockfish.rewards.reward_1 import calc_reward
+
+# from stockfish.rewards.reward_1 import calc_reward
+from stockfish.rewards.reward_2 import calc_reward
+
 from evals.AbstractEval import AbstractEval
 from evals.plotting.training_comparison import plot_training_comparison
 from stockfish.rewards.RewardProcess import StockfishProcess
@@ -39,16 +42,16 @@ def id_seq_to_uci(seq):
 
 
 # Number of self-play games in a mini-batch
-global_mini_batch_size = 128
+global_mini_batch_size = 8
 
 run_evals = True
 use_actor_warmup = True
-critic_warmup_epochs = 5
+critic_warmup_epochs = 0
 
-pickup_epoch = 0
+pickup_epoch = 550
 
-run_dir = 8
-run_dir_itr = 1
+run_dir = 10
+run_dir_itr = 2
 
 top_k = None
 
@@ -91,7 +94,7 @@ class SelfPlayTask(AbstractTask):
         self.lam = 0.95
         self.clip_ratio = 0.2
         self.target_kl = 0.0005  # was 0.0001
-        self.entropy_coef = 0.0005  # was 0.02 originally
+        self.entropy_coef = 0.00  # was 0.02 originally
         self.counter = 0
         self.game_start_token_id = config.start_token_id
         self.num_actions = config.vocab_size
@@ -99,7 +102,7 @@ class SelfPlayTask(AbstractTask):
         self.actor_updates = 0
 
         # Results
-        self.plot_freq = 10
+        self.plot_freq = 20
 
         # Pretrain save dir
         self.pretrain_save_dir = os.path.join(self.run_dir, 'pretrained')
@@ -111,7 +114,7 @@ class SelfPlayTask(AbstractTask):
         # Stockfish Engine
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
         self.engine.configure({'Threads': 32, "Hash": 4096 * 2})
-        self.nodes = 100000
+        self.nodes = 50000
         self.lines = 1
 
         # self.num_engines = 4
@@ -126,36 +129,31 @@ class SelfPlayTask(AbstractTask):
         #     engine.start()
 
 
-    # def __del__(self):
-    #     for engine in self.engine_workers:
-    #         engine.terminate()
-
-
     def build(self):
 
         # Optimizer parameters
         self.actor_learning_rate = 0.0000025  # 0.0001
-        self.critic_learning_rate = 0.0001  # 0.0001
+        self.critic_learning_rate = 0.00001  # 0.0001
         self.train_actor_iterations = 250  # was 250
         self.train_critic_iterations = 40  # was 40
 
-        if use_actor_warmup is True:
-            self.actor_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-                0.0,  # initial learning rate
-                1000,  # decay_steps
-                alpha=1.0,
-                warmup_target=self.actor_learning_rate,
-                warmup_steps=1000
-            )
-
-
-        self.critic_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-            0.0,  # initial learning rate
-            1000,  # decay_steps
-            alpha=1.0,
-            warmup_target=self.critic_learning_rate,
-            warmup_steps=int(critic_warmup_epochs * (global_mini_batch_size * .75))
-        )
+        # if use_actor_warmup is True:
+        #     self.actor_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+        #         0.0,  # initial learning rate
+        #         1000,  # decay_steps
+        #         alpha=1.0,
+        #         warmup_target=self.actor_learning_rate,
+        #         warmup_steps=1000
+        #     )
+        #
+        #
+        # self.critic_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+        #     0.0,  # initial learning rate
+        #     1000,  # decay_steps
+        #     alpha=1.0,
+        #     warmup_target=self.critic_learning_rate,
+        #     warmup_steps=int(critic_warmup_epochs * (global_mini_batch_size * .75))
+        # )
 
         # Optimizers
         if self.actor_optimizer is None:
@@ -344,8 +342,7 @@ class SelfPlayTask(AbstractTask):
             if len(trajectory) < config.seq_length:
                 trajectory += [0] * (config.seq_length - len(trajectory))
 
-
-        print('\nGen time:', time.time() - curr_time)
+        # print('\nGen time:', time.time() - curr_time)
         # -------------------------------------
         # Post process rewards
         # -------------------------------------
@@ -379,7 +376,7 @@ class SelfPlayTask(AbstractTask):
 
 
         batch_total_eval_time = time.time() - curr_time_2
-        print('Eval time:', batch_total_eval_time)
+        # print('Eval time:', batch_total_eval_time)
 
 
 
@@ -464,7 +461,7 @@ class SelfPlayTask(AbstractTask):
             actor_loss = actor_loss.numpy()
 
         self.actor_updates += policy_update_itr
-        print('Actor time:', time.time() - curr_time, 'seconds')
+        # print('Actor time:', time.time() - curr_time, 'seconds')
 
         # -------------------------------------
         # Train Critic
@@ -477,7 +474,10 @@ class SelfPlayTask(AbstractTask):
                 return_tensor,
             )
 
-        print('Critic time:', time.time() - curr_time, 'seconds')
+        # print('Critic time:', time.time() - curr_time, 'seconds')
+
+
+        avg_game_len = np.mean([len(x) for x in games])
 
         # Update results tracker
         epoch_info = {
@@ -487,6 +487,7 @@ class SelfPlayTask(AbstractTask):
             'p_iter': policy_update_itr,
             'entropy': entr,
             'kl': kl,
+            'game_len': avg_game_len,
             'checkmates': num_checkmates,
         }
 
@@ -556,7 +557,7 @@ class SelfPlayTask(AbstractTask):
 
 
         # 1. Check if a legal move has been made
-        if last_move not in config.end_of_game_tokens and last_move not in config.special_tokens:
+        if last_move not in config.non_move_tokens:
             move = chess.Move.from_uci(last_move)
             if move not in board.legal_moves:
                 return -1, True, prev_eval  # Illegal UCI
@@ -752,7 +753,7 @@ class SelfPlayTask(AbstractTask):
                     print(f"{key}: {value}", end=' | ')
                 else:
                     print("%s: %.5f" % (key, value), end=' | ')
-            print('| actor_updates:', self.actor_updates)
+            print('actor_updates:', self.actor_updates)
 
 
         # Update metrics
@@ -834,8 +835,8 @@ if __name__ == '__main__':
     actor_path = config.model_path
     critic_path = config.model_path
 
-    # actor_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'actor_weights_150')
-    # critic_path = os.path.join(config.results_dir, 'run_4', 'pretrained', 'critic_weights_150')
+    actor_path = os.path.join(config.results_dir, 'run_10', 'pretrained', 'actor_weights_550')
+    critic_path = os.path.join(config.results_dir, 'run_10', 'pretrained', 'critic_weights_550')
 
     # actor_path = None
     # critic_path = None

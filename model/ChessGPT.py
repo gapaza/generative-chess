@@ -119,6 +119,10 @@ class ChessGPT(tf.keras.Model):
         # Move Prediction Head
         move_predictions = self.move_prediction_head(decoded_move)
 
+        # T 1.0: [0.385452002286911, 0.20365677773952484, 0.11881597340106964, 0.11611542105674744, 0.0451316200196743]
+        # T 0.5: [0.6634194850921631, 0.18520191311836243, 0.06303726136684418, 0.060204289853572845, 0.009095141664147377]
+        move_predictions = move_predictions / 0.9
+
         # Value Prediction Head
         value_predictions = self.value_prediction_head(decoded_move)
 

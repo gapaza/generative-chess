@@ -3,9 +3,15 @@ import chess
 import chess.engine
 from multiprocessing import Process, Queue
 from stockfish.utils import get_stockfish
-
 # Game is a string of UCI moves
-def calc_reward(engine, game, n=100000):
+
+
+# Rewards
+correct_pred_win = 0.05
+incorrect_pred_win = -0.1
+
+
+def calc_reward(engine, game, n=100000, info=False):
     uci_moves = game.split(' ')
     rewards = []  # Always from white's perspective
     pad_len = config.seq_length - 1
@@ -137,7 +143,13 @@ def calc_reward(engine, game, n=100000):
     if len(rewards) < pad_len:
         rewards += ([0.0] * (pad_len - len(rewards)))
 
-    return rewards
+    if info is True:
+        return_info = {
+            'eval_history': eval_history,
+        }
+        return rewards, return_info
+    else:
+        return rewards
 
 
 

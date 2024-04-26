@@ -3,14 +3,6 @@ import time
 import tensorflow as tf
 from copy import deepcopy
 import matplotlib.gridspec as gridspec
-from concurrent.futures import ProcessPoolExecutor
-#set multiprocessing type to fork
-import multiprocessing as mp
-# mp.set_start_method('fork')
-# mp.set_start_method('spawn', force=True)
-from stockfish.utils import combine_alternate
-
-
 import random
 import math
 import chess.pgn
@@ -20,30 +12,24 @@ import matplotlib.pyplot as plt
 import os
 from tasks.AbstractTask import AbstractTask
 import scipy.signal
-from model import get_rl_models as get_model
+from model import get_vs_models as get_model
 from collections import OrderedDict
 import tensorflow_addons as tfa
 import chess
 import chess.engine
-
-# from stockfish.rewards.reward_1 import calc_reward
 from stockfish.rewards.reward_2 import calc_reward
-
 from evals.AbstractEval import AbstractEval
 from evals.plotting.training_comparison import plot_training_comparison
-from stockfish.rewards.RewardProcess import StockfishProcess
+from stockfish.utils import combine_alternate
+
 
 def discounted_cumulative_sums(x, discount):
     # Discounted cumulative sums of vectors for computing rewards-to-go and advantage estimates
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 
-def id_seq_to_uci(seq):
-    return [config.id2token[x] for x in seq]
-
-
 # Number of self-play games in a mini-batch
-global_mini_batch_size = 32
+global_mini_batch_size = 64
 
 run_evals = True
 use_actor_warmup = True
@@ -51,8 +37,10 @@ critic_warmup_epochs = 0
 
 pickup_epoch = 0
 
-run_dir = 102
-run_dir_itr = 2
+run_dir = 1004
+run_dir_itr = 0
+
+sample_temp = 0.9
 
 top_k = None
 
@@ -63,7 +51,7 @@ tf.random.set_seed(seed)
 np.random.seed(seed)
 
 
-class SelfPlaySepGrad(AbstractTask):
+class SelfPlayVsTask(AbstractTask):
 
     def __init__(
             self,
@@ -71,18 +59,22 @@ class SelfPlaySepGrad(AbstractTask):
             problem=None,
             epochs=50,
             actor_load_path=None,
+            actor_2_load_path=None,
             critic_load_path=None,
             debug=False,
             run_val=False,
             val_itr=0,
     ):
-        super(SelfPlaySepGrad, self).__init__(run_num, None, problem, epochs, actor_load_path, critic_load_path)
+        super(SelfPlayVsTask, self).__init__(run_num, None, problem, epochs, actor_load_path, critic_load_path)
         self.debug = debug
         self.run_val = run_val
         self.val_itr = val_itr
+        self.actor_2_load_path = actor_2_load_path
+
 
         # Evals
         self.eval = AbstractEval()
+        self.eval2 = AbstractEval()
 
         # Algorithm parameters
         self.mini_batch_size = global_mini_batch_size
@@ -112,122 +104,90 @@ class SelfPlaySepGrad(AbstractTask):
         self.actor_pretrain_save_path = os.path.join(self.pretrain_save_dir, 'actor_weights')
         self.critic_pretrain_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights')
 
+        # Critic save
+        self.critic_save_dir = os.path.join(self.run_dir, 'critic')
+        if not os.path.exists(self.critic_save_dir):
+            os.makedirs(self.critic_save_dir)
+        self.critic_save_path = os.path.join(self.critic_save_dir, 'critic_weights')
+
         # Stockfish Engine
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
         self.engine.configure({'Threads': 32, "Hash": 4096 * 2})
         self.nodes = 50000
         self.lines = 1
 
-        # self.num_engines = 4
-        # self.engine_workers = []
-        # self.engine_queues = []
-        # for _ in range(self.num_engines):
-        #     to_queue = mp.Queue()
-        #     from_queue = mp.Queue()
-        #     engine = StockfishProcess(to_queue, from_queue)
-        #     self.engine_workers.append(engine)
-        #     self.engine_queues.append((to_queue, from_queue))
-        #     engine.start()
+        # Additional epoch info
+        self.additional_info = {
+            'model_1_checkmates': [],
+            'model_2_checkmates': [],
+            'model_1_illegal_moves': [],
+            'model_2_illegal_moves': [],
+            'model_1_win_predictions': [],
+            'model_2_win_predictions': [],
+
+            'model_1_loss': [],
+            'model_2_loss': [],
+            'model_1_entropy': [],
+            'model_2_entropy': [],
+            'model_1_kl': [],
+            'model_2_kl': [],
+            'model_1_return': [],
+            'model_2_return': [],
+            'game_len': [],
+        }
+
 
 
     def build(self):
 
         # Optimizer parameters
-        self.actor_learning_rate = 0.000001  # 0.0001
+        self.actor_learning_rate = 0.00001  # 0.0001
         self.critic_learning_rate = 0.00001  # 0.0001
-        self.train_actor_iterations = 100  # was 250
+        self.train_actor_iterations = 250  # was 250
         self.train_critic_iterations = 40  # was 40
-
-
-        # if use_actor_warmup is True:
-        #     self.actor_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-        #         0.0,  # initial learning rate
-        #         1000,  # decay_steps
-        #         alpha=1.0,
-        #         warmup_target=self.actor_learning_rate,
-        #         warmup_steps=1000
-        #     )
-        # self.critic_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-        #     0.0,  # initial learning rate
-        #     1000,  # decay_steps
-        #     alpha=1.0,
-        #     warmup_target=self.critic_learning_rate,
-        #     warmup_steps=int(critic_warmup_epochs * (global_mini_batch_size * .75))
-        # )
-
-
 
         # Optimizers
         if self.actor_optimizer is None:
             # self.actor_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.actor_learning_rate)
             self.actor_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.actor_learning_rate)
+            self.actor_optimizer_2 = tfa.optimizers.RectifiedAdam(learning_rate=self.actor_learning_rate)
         if self.critic_optimizer is None:
             # self.critic_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.critic_learning_rate)
             self.critic_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.critic_learning_rate)
 
-        self.c_actor, self.c_critic = get_model(self.actor_load_path, self.critic_load_path)
-
-        # Color specific optimizers
-        self.white_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=0.000002)
-        self.black_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=0.000002)
-
-
-
-
-        self.c_actor.summary()
+        self.c_actor, self.c_actor_2, self.c_critic = get_model(self.actor_load_path, self.actor_2_load_path, self.critic_load_path)
 
 
     def run(self):
         self.build()
 
-        self.run_evals()
+        # self.run_evals()
         for x in range(self.epochs):
             self.curr_epoch = x
             epoch_info = self.fast_mini_batch()
 
             self.record(epoch_info)
 
-            if self.curr_epoch % 50 == 0:
+            if self.curr_epoch % 50 == 0 and self.curr_epoch > 0:
                 t_actor_save_path = os.path.join(self.pretrain_save_dir, 'actor_weights_' + str(self.curr_epoch + pickup_epoch))
+                t_actor_save_path_2 = os.path.join(self.pretrain_save_dir, 'actor_weights_2_' + str(self.curr_epoch + pickup_epoch))
                 t_critic_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights_' + str(self.curr_epoch + pickup_epoch))
                 self.c_actor.save_weights(t_actor_save_path)
+                self.c_actor_2.save_weights(t_actor_save_path_2)
                 self.c_critic.save_weights(t_critic_save_path)
+                # self.c_critic.save_weights(self.critic_save_path)
+
 
 
         # Save the parameters of the current actor and critic
         self.c_actor.save_weights(self.actor_pretrain_save_path)
+        self.c_actor_2.save_weights(self.actor_pretrain_save_path)
         self.c_critic.save_weights(self.critic_pretrain_save_path)
-
-
-
-    def sample_actions(self, board, actions, actions_log_prob):
-        tokens = id_seq_to_uci(actions)
-        # Filter out tokens that are special tokens
-        filtered_tokens = []
-        filtered_tokens_idx = []
-        for idx, token in enumerate(tokens):
-            if token in config.special_tokens or token in config.end_of_game_tokens or token is '':
-                continue
-            move = chess.Move.from_uci(token)
-            if move in board.legal_moves:
-                filtered_tokens.append(token)
-                filtered_tokens_idx.append(idx)
-        if len(filtered_tokens) == 0:  # Default to top action
-            return actions[0], actions_log_prob[0]
-        else:
-            # randomly select based on the log probabilities of the filtered actions
-            filtered_action_log_probs = [actions_log_prob[x] for x in filtered_tokens_idx]
-            filtered_action_probs = [math.exp(lp) for lp in filtered_action_log_probs]
-            total = sum(filtered_action_probs)  # Calculate the sum of all probabilities
-            filtered_action_probs = np.array([p / total for p in filtered_action_probs])  # Divide each probability by the total sum
-            action_idx = np.random.choice(filtered_tokens_idx, p=filtered_action_probs)
-            return actions[action_idx], actions_log_prob[action_idx]
 
 
     def fast_mini_batch(self):
         total_eval_time = 0
 
-        all_total_rewards = []
         all_actions = [[] for _ in range(self.mini_batch_size)]
         all_rewards_post = [[] for _ in range(self.mini_batch_size)]
         all_logprobs = [[] for _ in range(self.mini_batch_size)]
@@ -240,21 +200,39 @@ class SelfPlaySepGrad(AbstractTask):
         game_evals = [0.2 for x in range(self.mini_batch_size)] # Eval from white perspective
         action_mask = [[] for x in range(self.mini_batch_size)]
 
-        all_logprobs_full = [[] for _ in range(self.mini_batch_size)]  # Logprobs for all actions
-        all_probs_full = [[] for _ in range(self.mini_batch_size)]
 
         # -------------------------------------
-        # Sample Actor
+        # Sample Actors
         # -------------------------------------
-        curr_time = time.time()
+        player_models = [
+            1,  # self.c_actor
+            2   # self.c_actor_2
+        ]
+        random.shuffle(player_models)
+        white_model = player_models[0]
+        black_model = player_models[1]
+        # print('-----------------------------------')
+        # print('White player:', 'Actor ' + str(white_model), '| Black player:', 'Actor ' + str(black_model))
+
+        self.additional_info['model_1_checkmates'].append(0)
+        self.additional_info['model_2_checkmates'].append(0)
+        self.additional_info['model_1_illegal_moves'].append(0)
+        self.additional_info['model_2_illegal_moves'].append(0)
+        self.additional_info['model_1_win_predictions'].append(0)
+        self.additional_info['model_2_win_predictions'].append(0)
 
         for t in range(self.max_steps_per_game):
 
+            # 1. Determine which model to use
+            if t % 2 == 0:  # even number
+                actor = white_model
+            else:  # odd number
+                actor = black_model
 
-            # Sample the actor
-            action_log_prob, action, all_action_probs, batch_logprobs = self.sample_actor(observation)  # returns shape: (batch,) and (batch,)
+            # 2. Sample actions
+            action_log_prob, action, all_action_probs, batch_logprobs = self.sample_actor(observation, actor=actor)  # returns shape: (batch,) and (batch,)
 
-            # Update the game state
+            # 3. Update the game state
             observation_new = deepcopy(observation)
             for idx, act in enumerate(action):
                 if ended_games[idx] is True:
@@ -270,11 +248,8 @@ class SelfPlaySepGrad(AbstractTask):
                     games[idx].append(m_action)
                     observation_new[idx].append(m_action)
                     action_mask[idx].append(1)
-                    # if idx == 0:
-                    #     # print(config.id2token[m_action], round(math.exp(action_log_prob[idx]), 3), end=' ')
-                    #     print(config.id2token[m_action], end=' ')
 
-            # Determine reward for each batch element
+            # 4. Determine if game has ended
             if len(games[0]) == self.max_steps_per_game:
                 done = True
                 for idx, game in enumerate(games):
@@ -282,7 +257,8 @@ class SelfPlaySepGrad(AbstractTask):
                         reward, game_ended, new_eval = self.calc_reward(
                             game,
                             game_evals[idx],
-                            boards[idx]
+                            boards[idx],
+                            actor
                         )
                         if game_ended is False:
                             game_evals[idx] = new_eval
@@ -296,75 +272,48 @@ class SelfPlaySepGrad(AbstractTask):
                         reward, game_ended, new_eval = self.calc_reward(
                             game,
                             game_evals[idx],
-                            boards[idx]
+                            boards[idx],
+                            actor
                         )
                         if game_ended is False:
                             game_evals[idx] = new_eval
                         if game_ended != ended_games[idx]:
                             epoch_games.append(' '.join([config.id2token[x] for x in game]))
                         ended_games[idx] = game_ended
-
             if all(ended_games):
                 done = True
 
-
-            # Update the observation
+            # 5. Update the observation
             if done is True:
                 critic_observation_buffer = deepcopy(observation_new)
             else:
                 observation = observation_new
 
-
-        # Count the number of checkmates
+        # Count the number of checkmates + finish trajectories
         num_checkmates = 0
         for idx, board in enumerate(boards):
             if board.is_checkmate() is True:
-                # checkmating_moves = [config.id2token[x] for x in games[idx]]
-                # print('Checkmating moves:', ' '.join(checkmating_moves))
-                # print('Rewards:', all_rewards[idx])
                 num_checkmates += 1
-
-
         for trajectory in observation:
             if len(trajectory) < config.seq_length - 1:
                 trajectory += [0] * ((config.seq_length-1) - len(trajectory))
             trajectory = trajectory[:config.seq_length - 1]
-
         for trajectory in action_mask:
             if len(trajectory) < config.seq_length - 1:
                 trajectory += [0] * ((config.seq_length-1) - len(trajectory))
-
         for trajectory in critic_observation_buffer:
             if len(trajectory) < config.seq_length:
                 trajectory += [0] * (config.seq_length - len(trajectory))
 
-        # print('\nGen time:', time.time() - curr_time)
+
+        # print('game -', epoch_games[0])
         self.save_game_pgn(games[0])
         # -------------------------------------
         # Post process rewards
         # -------------------------------------
-        curr_time_2 = time.time()
-
-        # --- Batch Eval
-        # num_batches = self.num_engines - 1
-        # batch_size = global_mini_batch_size // num_batches
-        # batches = [games[i:i + batch_size] for i in range(0, len(games), batch_size)]
-        #
-        # # Put the batches into the engine queues
-        # # print('--> PUTTING BATCHES INTO QUEUES')
-        # for idx, batch in enumerate(batches):
-        #     to_queue = self.engine_queues[idx][0]
-        #     to_queue.put(batch)
-        #
-        # # Get the results from the engine queues
-        # all_rewards_post = []
-        # for to_queue, from_queue in self.engine_queues:
-        #     # print('Waiting on queue')
-        #     results = from_queue.get(timeout=60)
-        #     all_rewards_post.extend(results)
 
         all_even_masks = []  # Black moves (0 - white, 1 - black)
-        all_odd_masks = []   # White moves (1 - white, 0 - black)
+        all_odd_masks = []  # White moves (1 - white, 0 - black)
         all_even_masks_clip = []
         all_odd_masks_clip = []
         all_white_rewards = []
@@ -378,13 +327,12 @@ class SelfPlaySepGrad(AbstractTask):
             reward = [x * 0.1 for x in reward]
             all_rewards_post[idx] = reward
 
-
             even_mask = [x % 2 for x in range(len(game))]  # [0, 1, 0, 1, ...]
-            odd_mask = [1 - x for x in even_mask]          # [1, 0, 1, 0, ...]
+            odd_mask = [1 - x for x in even_mask]  # [1, 0, 1, 0, ...]
             even_mask += [0] * (config.seq_length - len(even_mask))
             odd_mask += [0] * (config.seq_length - len(odd_mask))
-            even_mask_clip = even_mask[:config.seq_length-1]
-            odd_mask_clip = odd_mask[:config.seq_length-1]
+            even_mask_clip = even_mask[:config.seq_length - 1]
+            odd_mask_clip = odd_mask[:config.seq_length - 1]
             all_even_masks.append(even_mask)
             all_odd_masks.append(odd_mask)
             all_even_masks_clip.append(even_mask_clip)
@@ -400,6 +348,9 @@ class SelfPlaySepGrad(AbstractTask):
             all_white_rewards.append(white_rewards)
             all_black_rewards.append(black_rewards)
 
+
+
+
         # -------------------------------------
         # Sample Critic
         # -------------------------------------
@@ -413,7 +364,6 @@ class SelfPlaySepGrad(AbstractTask):
         for idx, value in zip(range(self.mini_batch_size), value_t):
             last_reward = value[-1]
             all_rewards_post[idx].append(last_reward)
-
 
             white_v_t = []
             black_v_t = []
@@ -432,41 +382,28 @@ class SelfPlaySepGrad(AbstractTask):
             white_value_t.append(white_v_t)
             black_value_t.append(black_v_t)
 
-
         # -------------------------------------
         # Calculate Advantage and Return
         # -------------------------------------
 
-        proc_time = time.time()
         all_advantages = [[] for _ in range(self.mini_batch_size)]
         all_returns = [[] for _ in range(self.mini_batch_size)]
-
         all_white_advantages = [[] for _ in range(self.mini_batch_size)]
         all_black_advantages = [[] for _ in range(self.mini_batch_size)]
-
         all_white_returns = [[] for _ in range(self.mini_batch_size)]
         all_black_returns = [[] for _ in range(self.mini_batch_size)]
-
         all_combined_returns = [[] for _ in range(self.mini_batch_size)]
 
-        # print('All rewards:', all_rewards_post[0])
-        # print('White rewards:', all_white_rewards[0])
-        # print('Black rewards:', all_black_rewards[0])
-        # print('\n')
-        # print('White returns:', white_value_t[0])
-        # print('Black returns:', black_value_t[0])
-
+        cum_white_advantages = []
+        cum_black_advantages = []
 
         for idx in range(len(all_rewards_post)):
             w_rewards = np.array(all_white_rewards[idx])
             b_rewards = np.array(all_black_rewards[idx])
-
             w_values = np.array(white_value_t[idx])
             b_values = np.array(black_value_t[idx])
-
             w_deltas = w_rewards[:-1] + self.gamma * w_values[1:] - w_values[:-1]
             b_deltas = b_rewards[:-1] + self.gamma * b_values[1:] - b_values[:-1]
-
             w_adv_tensor = discounted_cumulative_sums(
                 w_deltas, self.gamma * self.lam
             )
@@ -476,6 +413,10 @@ class SelfPlaySepGrad(AbstractTask):
             all_white_advantages[idx] = w_adv_tensor
             all_black_advantages[idx] = b_adv_tensor
 
+            cum_white_advantages += deepcopy(w_adv_tensor.tolist())
+            cum_black_advantages += deepcopy(b_adv_tensor.tolist())
+
+
 
 
             w_ret_tensor = discounted_cumulative_sums(
@@ -484,32 +425,18 @@ class SelfPlaySepGrad(AbstractTask):
             b_ret_tensor = discounted_cumulative_sums(
                 b_rewards, self.gamma
             )
-
             combined_returns = combine_alternate(w_ret_tensor, b_ret_tensor)
-            # print('White return tensor:', w_ret_tensor)
-            # print('Black return tensor:', b_ret_tensor)
-            # exit(0)
-
-
             while len(combined_returns) < config.seq_length:
                 combined_returns.append(0)
             if len(combined_returns) > config.seq_length:
                 combined_returns = combined_returns[:config.seq_length]
             all_combined_returns[idx] = np.array(combined_returns)
-
             w_ret_tensor = np.array(w_ret_tensor, dtype=np.float32)
             b_ret_tensor = np.array(b_ret_tensor, dtype=np.float32)
             all_white_returns[idx] = w_ret_tensor
             all_black_returns[idx] = b_ret_tensor
 
-
-
-
-
-
-
-
-
+            # Color agnostic advantage
             rewards = np.array(all_rewards_post[idx])
             values = np.array(value_t[idx])
             deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
@@ -529,7 +456,6 @@ class SelfPlaySepGrad(AbstractTask):
             np.std(all_advantages),
         )
         all_advantages = (all_advantages - advantage_mean) / advantage_std
-
         observation_tensor = tf.convert_to_tensor(observation, dtype=tf.float32)
         action_tensor = tf.convert_to_tensor(all_actions, dtype=tf.int32)
         logprob_tensor = tf.convert_to_tensor(all_logprobs, dtype=tf.float32)
@@ -539,21 +465,21 @@ class SelfPlaySepGrad(AbstractTask):
         return_tensor = tf.expand_dims(return_tensor, axis=-1)
         action_mask_tensor = tf.convert_to_tensor(action_mask, dtype=tf.float32)
 
+        # Color specific tensors
+        # print('Advantage Means')
+        # white_adv_means = [np.mean(x) for x in all_white_advantages if len(x) > 0]
+        # black_adv_means = [np.mean(x) for x in all_black_advantages if len(x) > 0]
+        # white_adv_mean = np.mean(white_adv_means)
+        # black_adv_mean = np.mean(black_adv_means)
+        # white_adv_stds = [np.std(x) for x in all_white_advantages if len(x) > 0]
+        # black_adv_stds = [np.std(x) for x in all_black_advantages if len(x) > 0]
+        # white_adv_std = np.mean(white_adv_stds)
+        # black_adv_std = np.mean(black_adv_stds)
 
-        # print('All white advantages:', all_white_advantages[0])
-        # print('All Advantages:', all_advantages[0])
-
-
-
-        white_adv_means = [np.mean(x) for x in all_white_advantages if len(x) > 0]
-        black_adv_means = [np.mean(x) for x in all_black_advantages if len(x) > 0]
-        white_adv_mean = np.mean(white_adv_means)
-        black_adv_mean = np.mean(black_adv_means)
-        white_adv_stds = [np.std(x) for x in all_white_advantages if len(x) > 0]
-        black_adv_stds = [np.std(x) for x in all_black_advantages if len(x) > 0]
-        white_adv_std = np.mean(white_adv_stds)
-        black_adv_std = np.mean(black_adv_stds)
-
+        white_adv_mean = np.mean(cum_white_advantages)
+        black_adv_mean = np.mean(cum_black_advantages)
+        white_adv_std = np.std(cum_white_advantages)
+        black_adv_std = np.std(cum_black_advantages)
 
         norm_white_advantages = []
         for white_adv in all_white_advantages:
@@ -566,21 +492,6 @@ class SelfPlaySepGrad(AbstractTask):
         all_white_advantages = norm_white_advantages
         all_black_advantages = norm_black_advantages
 
-
-
-        # white_advantage_mean, white_advantage_std = (
-        #     np.mean(all_white_advantages),
-        #     np.std(all_white_advantages),
-        # )
-        # all_white_advantages = (all_white_advantages - white_advantage_mean) / white_advantage_std
-        #
-        # black_advantage_mean, black_advantage_std = (
-        #     np.mean(all_black_advantages),
-        #     np.std(all_black_advantages),
-        # )
-        # all_black_advantages = (all_black_advantages - black_advantage_mean) / black_advantage_std
-
-
         all_white_advantages_padded = []
         all_black_advantages_padded = []
         for idx in range(len(all_white_advantages)):
@@ -592,118 +503,130 @@ class SelfPlaySepGrad(AbstractTask):
                 white_adv_pad.append(w)
                 white_adv_pad.append(0)
             white_adv_pad = white_adv_pad[:-1]
-            while len(white_adv_pad) < config.seq_length-1:
+            while len(white_adv_pad) < config.seq_length - 1:
                 white_adv_pad.append(0)
-            if len(white_adv_pad) > config.seq_length-1:
-                white_adv_pad = white_adv_pad[:config.seq_length-1]
+            if len(white_adv_pad) > config.seq_length - 1:
+                white_adv_pad = white_adv_pad[:config.seq_length - 1]
 
             black_adv_pad = []
             for b in b_adv:
                 black_adv_pad.append(0)
                 black_adv_pad.append(b)
-            while len(black_adv_pad) < config.seq_length-1:
+            while len(black_adv_pad) < config.seq_length - 1:
                 black_adv_pad.append(0)
-            if len(black_adv_pad) > config.seq_length-1:
-                black_adv_pad = black_adv_pad[:config.seq_length-1]
+            if len(black_adv_pad) > config.seq_length - 1:
+                black_adv_pad = black_adv_pad[:config.seq_length - 1]
 
             all_white_advantages_padded.append(white_adv_pad)
             all_black_advantages_padded.append(black_adv_pad)
-
 
         all_combined_advantages = []
         for idx in range(len(all_white_advantages)):
             w_adv = all_white_advantages[idx]
             b_adv = all_black_advantages[idx]
             combined_adv = combine_alternate(w_adv, b_adv)
-            while len(combined_adv) < config.seq_length-1:
+            while len(combined_adv) < config.seq_length - 1:
                 combined_adv.append(0)
-            if len(combined_adv) > config.seq_length-1:
-                combined_adv = combined_adv[:config.seq_length-1]
+            if len(combined_adv) > config.seq_length - 1:
+                combined_adv = combined_adv[:config.seq_length - 1]
             all_combined_advantages.append(combined_adv)
-
-        # print('\n')
-        # print('Combined advantages:', all_combined_advantages[0])
-        # print('White advantages:', all_white_advantages[0])
-        # print('Black advantages:', all_black_advantages[0])
-
-
-
-        combined_advantage_tensor = tf.convert_to_tensor(all_combined_advantages, dtype=tf.float32)
-
-
 
         white_advantage_tensor = tf.convert_to_tensor(all_white_advantages_padded, dtype=tf.float32)
         black_advantage_tensor = tf.convert_to_tensor(all_black_advantages_padded, dtype=tf.float32)
-
-        # white_return_tensor = tf.convert_to_tensor(all_white_returns, dtype=tf.float32)
-        # white_return_tensor = tf.expand_dims(white_return_tensor, axis=-1)
-        #
-        # black_return_tensor = tf.convert_to_tensor(all_black_returns, dtype=tf.float32)
-        # black_return_tensor = tf.expand_dims(black_return_tensor, axis=-1)
-
-        white_action_mask_tensor = tf.convert_to_tensor(all_even_masks_clip, dtype=tf.float32)  # 0 - white, 1 - black
-        black_action_mask_tensor = tf.convert_to_tensor(all_odd_masks_clip, dtype=tf.float32)   # 1 - white, 0 - black
-
+        white_action_mask_tensor = tf.convert_to_tensor(all_odd_masks_clip, dtype=tf.float32)   # 1 - white, 0 - black
+        black_action_mask_tensor = tf.convert_to_tensor(all_even_masks_clip, dtype=tf.float32)  # 0 - white, 1 - black
 
         combined_returns_tensor = tf.convert_to_tensor(all_combined_returns, dtype=tf.float32)
         combined_returns_tensor = tf.expand_dims(combined_returns_tensor, axis=-1)
 
+        observation_tensor = observation_tensor[:, :config.seq_length - 1]
 
+        a1_idx = player_models.index(1)
+        if a1_idx == 0:  # actor 1 is playing white
+            a1_advantage_tensor = white_advantage_tensor
+            a1_action_mask_tensor = white_action_mask_tensor
+            a2_advantage_tensor = black_advantage_tensor
+            a2_action_mask_tensor = black_action_mask_tensor
+        else:
+            a1_advantage_tensor = black_advantage_tensor
+            a1_action_mask_tensor = black_action_mask_tensor
+            a2_advantage_tensor = white_advantage_tensor
+            a2_action_mask_tensor = white_action_mask_tensor
 
-
-        # white_action_mask_tensor,  # 0 - white, 1 - black
-        # black_action_mask_tensor,  # 1 - white, 0 - black
-        # white_advantage_buffer,
-        # black_advantage_buffer,
-
-        # print('----> Log probability buffer:', logprob_tensor.shape)    # (batch, 127)
-        # print('----------> Advantage buffer:', advantage_tensor.shape)  # (batch, 127)
-        #
-        # print('----> White advantage tensor:', white_advantage_tensor.shape)    # (batch, 128)
-        # print('-----> Mask out black values:', black_action_mask_tensor.shape)  # (batch, 127)
-        #
-        # print('----> Black advantage tensor:', black_advantage_tensor.shape)
-        # print('-----> Mask out white values:', white_action_mask_tensor.shape)
+        # -------------------------------------
+        # Printing Models
+        # -------------------------------------
+        # a1_color = 'white' if player_models[0] == 1 else 'black'
+        # a2_color = 'white' if player_models[1] == 1 else 'black'
+        # print('\n---------------- Actor 1:', a1_color)
+        # first_obs = observation_tensor.numpy().tolist()[0]
+        # first_obs_tokens = [config.id2token[x] for x in first_obs]
+        # print('------ First Observation:', ' '.join(first_obs_tokens))
+        # print('----- Observation Tensor:', observation_tensor.numpy().tolist()[0])
+        # print('---------- Action Tensor:', action_tensor.numpy().tolist()[0])
+        # print('--------- Logprob Tensor:', logprob_tensor.numpy().tolist()[0])
+        # print('----- Action Mask Tensor:', action_mask_tensor.numpy().tolist()[0])
+        # print('-- Action Mask Tensor A1:', a1_action_mask_tensor.numpy().tolist()[0])
+        # print('---- Advantage Tensor A1:', a1_advantage_tensor.numpy().tolist()[0])
 
 
         # -------------------------------------
-        # Train Actor
+        # Train Actor 1
         # -------------------------------------
-        observation_tensor = observation_tensor[:, :config.seq_length-1]
-        # print('SHAPES:', observation_tensor.shape, action_tensor.shape, logprob_tensor.shape, advantage_tensor.shape, action_mask_tensor.shape)
+        # print('--> Actor 1 update')
 
-        curr_time = time.time()
         policy_update_itr = 0
-        kl, entr, white_policy_loss, black_policy_loss = 0, 0, 0, 0
+        kl_1, entr_1, loss_1, policy_loss_1 = 0, 0, 0, 0
         if self.curr_epoch >= critic_warmup_epochs:
             for i in range(self.train_actor_iterations):
                 policy_update_itr += 1
-                kl, entr, white_policy_loss, black_policy_loss = self.train_actor(
+                kl_1, entr_1, loss_1, policy_loss_1 = self.train_actor_1(
                     observation_tensor,
                     action_tensor,
                     logprob_tensor,
-                    advantage_tensor,
                     action_mask_tensor,
-                    white_action_mask_tensor,
-                    black_action_mask_tensor,
-                    white_advantage_tensor,
-                    black_advantage_tensor,
-                    combined_advantage_tensor
+                    a1_action_mask_tensor,
+                    a1_advantage_tensor,
                 )
-                if abs(kl) > 1.5 * self.target_kl:
+                if abs(kl_1) > 1.5 * self.target_kl:
                     # Early Stopping
                     break
-            kl = kl.numpy()
-            entr = entr.numpy()
-            white_policy_loss = white_policy_loss.numpy()
-            black_policy_loss = black_policy_loss.numpy()
-
+            kl_1 = kl_1.numpy()
+            entr_1 = entr_1.numpy()
+            loss_1 = loss_1.numpy()
+            policy_loss_1 = policy_loss_1.numpy()
         self.actor_updates += policy_update_itr
-        # print('Actor time:', time.time() - curr_time, 'seconds')
+
+        # -------------------------------------
+        # Train Actor 2
+        # -------------------------------------
+        # print('--> Actor 2 update')
+
+        kl_2, entr_2, loss_2, policy_loss_2 = 0, 0, 0, 0
+        if self.curr_epoch >= critic_warmup_epochs:
+            for i in range(self.train_actor_iterations):
+                policy_update_itr += 1
+                kl_2, entr_2, loss_2, policy_loss_2 = self.train_actor_2(
+                    observation_tensor,
+                    action_tensor,
+                    logprob_tensor,
+                    action_mask_tensor,
+                    a2_action_mask_tensor,
+                    a2_advantage_tensor,
+                )
+                if abs(kl_2) > 1.5 * self.target_kl:
+                    # Early Stopping
+                    break
+            kl_2 = kl_2.numpy()
+            entr_2 = entr_2.numpy()
+            loss_2 = loss_2.numpy()
+            policy_loss_2 = policy_loss_2.numpy()
+        self.actor_updates += policy_update_itr
 
         # -------------------------------------
         # Train Critic
         # -------------------------------------
+        # print('--> Critic update')
 
         curr_time = time.time()
         for i in range(self.train_critic_iterations):
@@ -712,29 +635,48 @@ class SelfPlaySepGrad(AbstractTask):
                 combined_returns_tensor,  # return_tensor,
             )
 
-        # print('Critic time:', time.time() - curr_time, 'seconds')
-
-
         avg_game_len = np.mean([len(x) for x in games])
 
         # Update results tracker
         epoch_info = {
             'mb_return': np.mean(all_rewards_post),
             'c_loss': value_loss.numpy(),
-            'w_loss': white_policy_loss,
-            'b_loss': black_policy_loss,
+            'a1_loss': loss_1,
+            'a2_loss': loss_2,
             'p_iter': policy_update_itr,
-            'entropy': entr,
-            'kl': kl,
+            'a1_entropy': entr_1,
+            'a2_entropy': entr_2,
+            'a1_kl': kl_1,
+            'a2_kl': kl_2,
             'game_len': avg_game_len,
             'checkmates': num_checkmates,
         }
 
+        # Update additional info
+        self.additional_info['model_1_loss'].append(loss_1)
+        self.additional_info['model_2_loss'].append(loss_2)
+        self.additional_info['model_1_entropy'].append(entr_1)
+        self.additional_info['model_2_entropy'].append(entr_2)
+        self.additional_info['model_1_kl'].append(kl_1)
+        self.additional_info['model_2_kl'].append(kl_2)
 
+        avg_game_len = np.mean([len(x) for x in games])
+        self.additional_info['game_len'].append(avg_game_len)
 
-        # print('GAME:', epoch_games[0])
+        avg_white_reward = np.mean([np.sum(x) for x in all_white_rewards])
+        avg_black_reward = np.mean([np.sum(x) for x in all_black_rewards])
+        if player_models[0] == 1:
+            self.additional_info['model_1_return'].append(avg_white_reward)
+            self.additional_info['model_2_return'].append(avg_black_reward)
+        else:
+            self.additional_info['model_1_return'].append(avg_black_reward)
+            self.additional_info['model_2_return'].append(avg_white_reward)
+
 
         return epoch_info
+
+
+
 
 
     def save_game_pgn(self, game_moves):
@@ -766,17 +708,17 @@ class SelfPlaySepGrad(AbstractTask):
             exporter = chess.pgn.FileExporter(pgn_file)
             game.accept(exporter)
 
-        # Append UCI move sequence to the end of the PGN file
-        with open(pgn_path, 'a') as pgn_file:
-            pgn_file.write('\n\n')
-            pgn_file.write(' '.join(uci_moves))
-            pgn_file.write('\n\n')
 
-    # This is only to be called if the game has not finished
-    # All position evals are from the perspective of the white player
-    def calc_reward(self, game, prev_eval, board):
+
+    def calc_reward(self, game, prev_eval, board, actor):
         uci_moves = [config.id2token[x] for x in game]
         last_move = uci_moves[-1]
+
+        if actor == 1:
+            prefix = 'model_1'
+        else:
+            prefix = 'model_2'
+
 
         # 0. Determine the turn color
         white_turn = (board.turn == chess.WHITE)
@@ -791,11 +733,13 @@ class SelfPlaySepGrad(AbstractTask):
             # print('\nCheckmate prediction token:', last_move, 'Winning token:', winning_token)
             # print('Move sequence string:', ' '.join(uci_moves))
             if last_move == winning_token:
+                self.additional_info[prefix + '_win_predictions'][-1] += 1
                 return 1.0, True, prev_eval
             else:
                 return -1.0, True, prev_eval
         elif board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves() or board.is_fivefold_repetition():
             if last_move == '[draw]':
+                self.additional_info[prefix + '_win_predictions'][-1] += 1
                 return 1.0, True, prev_eval
             else:
                 return -1.0, True, prev_eval
@@ -805,8 +749,10 @@ class SelfPlaySepGrad(AbstractTask):
         if last_move not in config.non_move_tokens:
             move = chess.Move.from_uci(last_move)
             if move not in board.legal_moves:
+                self.additional_info[prefix + '_illegal_moves'][-1] += 1
                 return -1, True, prev_eval  # Illegal UCI
         else:
+            self.additional_info[prefix + '_illegal_moves'][-1] += 1
             return -1, True, prev_eval  # Illegal special token move
 
 
@@ -818,47 +764,57 @@ class SelfPlaySepGrad(AbstractTask):
         # 2. Check if checkmate
         if board.is_checkmate():
             # print('\nCheckmate played\n')
+            self.additional_info[prefix + '_checkmates'][-1] += 1
             return 1.0, False, prev_eval
 
         # 3. Check if draw
         if board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves() or board.is_fivefold_repetition():
             return -0.1, False, prev_eval
 
-
         return 0.0, False, prev_eval
 
 
-    # -------------------------------------
-    # Actor-Critic Functions
-    # -------------------------------------
 
-    def sample_actor(self, observation):
+    def sample_actor(self, observation, actor=1):
         inf_idx = len(observation[0]) - 1  # all batch elements have the same length
         observation_input = deepcopy(observation)
         observation_input = tf.convert_to_tensor(observation_input, dtype=tf.int32)
         inf_idx = tf.convert_to_tensor(inf_idx, dtype=tf.int32)
-        if top_k is not None:
-            return self._sample_actor_top_k(observation_input, inf_idx)
+        if actor == 1:
+            return self._sample_actor_1(observation_input, inf_idx)
         else:
-            return self._sample_actor(observation_input, inf_idx)
+            return self._sample_actor_2(observation_input, inf_idx)
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
         tf.TensorSpec(shape=(), dtype=tf.int32)
     ])
-    def _sample_actor(self, observation_input, inf_idx):
+    def _sample_actor_1(self, observation_input, inf_idx):
         # print('sampling actor', inf_idx)
         pred_probs, pred_values = self.c_actor(observation_input)
+        # pred_probs_t = pred_probs / sample_temp
+        
         pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
-
-        # Batch sampling
         all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
         all_token_log_probs = tf.math.log(all_token_probs + 1e-10)
+
+
+        # pred_probs_t = tf.nn.softmax(pred_probs_t, axis=-1)  # shape (batch, seq_len, vocab_size)
+        # all_token_probs_t = pred_probs_t[:, inf_idx, :]  # shape (batch, 2)
+        # all_token_log_probs_t = tf.math.log(all_token_probs_t + 1e-10)
+
+
         samples = tf.random.categorical(all_token_log_probs, 1)  # shape (batch, 1)
+
+
+
+
+
+
+
         next_bit_ids = tf.squeeze(samples, axis=-1)  # shape (batch,)
         batch_indices = tf.range(0, tf.shape(all_token_log_probs)[0], dtype=tf.int64)  # shape (batch,)
         next_bit_probs = tf.gather_nd(all_token_log_probs, tf.stack([batch_indices, next_bit_ids], axis=-1))
-
         actions = next_bit_ids  # (batch,)
         actions_log_prob = next_bit_probs  # (batch,)
         return actions_log_prob, actions, all_token_probs, all_token_log_probs
@@ -867,19 +823,29 @@ class SelfPlaySepGrad(AbstractTask):
         tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
         tf.TensorSpec(shape=(), dtype=tf.int32)
     ])
-    def _sample_actor_top_k(self, observation_input, inf_idx):
+    def _sample_actor_2(self, observation_input, inf_idx):
         # print('sampling actor', inf_idx)
-        pred_probs, pred_vals = self.c_actor(observation_input)
-        pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
+        pred_probs, pred_values = self.c_actor_2(observation_input)
+        # pred_probs_t = pred_probs / sample_temp
 
-        # Get top k moves
-        k = 5
-        if top_k is not None:
-            k = top_k
-        pred_probs_inf = pred_probs[:, inf_idx, :]  # shape (batch, vocab_size)
-        top_probs, top_indices = tf.math.top_k(pred_probs_inf, k=k) # shape (batch, k), shape (batch, k)
-        top_probs_log = tf.math.log(top_probs + 1e-10)
-        return top_probs_log, top_indices, pred_probs
+        
+        pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
+        all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
+        all_token_log_probs = tf.math.log(all_token_probs + 1e-10)
+
+        # pred_probs_t = tf.nn.softmax(pred_probs_t, axis=-1)  # shape (batch, seq_len, vocab_size)
+        # all_token_probs_t = pred_probs_t[:, inf_idx, :]  # shape (batch, 2)
+        # all_token_log_probs_t = tf.math.log(all_token_probs_t + 1e-10)
+
+
+        samples = tf.random.categorical(all_token_log_probs, 1)  # shape (batch, 1)
+
+        next_bit_ids = tf.squeeze(samples, axis=-1)  # shape (batch,)
+        batch_indices = tf.range(0, tf.shape(all_token_log_probs)[0], dtype=tf.int64)  # shape (batch,)
+        next_bit_probs = tf.gather_nd(all_token_log_probs, tf.stack([batch_indices, next_bit_ids], axis=-1))
+        actions = next_bit_ids  # (batch,)
+        actions_log_prob = next_bit_probs  # (batch,)
+        return actions_log_prob, actions, all_token_probs, all_token_log_probs
 
     def sample_critic(self, observation):
         for trajectory in observation:
@@ -899,141 +865,143 @@ class SelfPlaySepGrad(AbstractTask):
         return t_value
 
     @tf.function(input_signature=[
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
     ])
-    def train_actor(
+    def train_actor_1(
             self,
             observation_buffer,
             action_buffer,
             logprobability_buffer,
-            advantage_buffer,
             action_mask_tensor,
-            white_action_mask_tensor,  # 0 - white, 1 - black
-            black_action_mask_tensor,  # 1 - white, 0 - black
-            white_advantage_buffer,
-            black_advantage_buffer,
-            combined_advantage_buffer,
+            color_action_mask_tensor,
+            color_advantage_buffer,
     ):
 
         # White loss calc
         # print('--> White actor update')
         with tf.GradientTape() as tape:
             pred_probs, pred_vals = self.c_actor(observation_buffer)  # shape: (batch, seq_len, 2)
+
             pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
             pred_log_probs = tf.math.log(pred_probs)  # shape: (batch, seq_len, 2)
 
+            loss = 0
             logprobability = tf.reduce_sum(
                 tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
             )  # shape (batch, seq_len)
-            white_logprobs = logprobability * black_action_mask_tensor
-            white_logprobs_buffer = logprobability_buffer * black_action_mask_tensor
+            white_logprobs = logprobability * color_action_mask_tensor
+            white_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
             white_ratio = tf.exp(
                 white_logprobs - white_logprobs_buffer
             )
             white_min_advantage = tf.where(
-                white_advantage_buffer > 0,
-                (1 + self.clip_ratio) * white_advantage_buffer,
-                (1 - self.clip_ratio) * white_advantage_buffer,
+                color_advantage_buffer > 0,
+                (1 + self.clip_ratio) * color_advantage_buffer,
+                (1 - self.clip_ratio) * color_advantage_buffer,
             )
-            white_policy_loss = -tf.reduce_mean(
-                tf.minimum(white_ratio * white_advantage_buffer, white_min_advantage)
+            policy_loss = -tf.reduce_mean(
+                tf.minimum(white_ratio * color_advantage_buffer, white_min_advantage)
             )
+            loss += policy_loss
 
-        white_grads = tape.gradient(white_policy_loss, self.c_actor.trainable_variables)
-        self.white_optimizer.apply_gradients(zip(white_grads, self.c_actor.trainable_variables))
-
-        # Black loss calc
-        # print('--> Black actor update')
-        with tf.GradientTape() as tape:
-            pred_probs, pred_vals = self.c_actor(observation_buffer)  # shape: (batch, seq_len, 2)
-            pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
-            pred_log_probs = tf.math.log(pred_probs)  # shape: (batch, seq_len, 2)
-
-            logprobability = tf.reduce_sum(
-                tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
-            )  # shape (batch, seq_len)
-            black_logprobs = logprobability * white_action_mask_tensor
-            black_logprobs_buffer = logprobability_buffer * white_action_mask_tensor
-            black_ratio = tf.exp(
-                black_logprobs - black_logprobs_buffer
-            )
-            black_min_advantage = tf.where(
-                black_advantage_buffer > 0,
-                (1 + self.clip_ratio) * black_advantage_buffer,
-                (1 - self.clip_ratio) * black_advantage_buffer,
-            )
-            black_policy_loss = -tf.reduce_mean(
-                tf.minimum(black_ratio * black_advantage_buffer, black_min_advantage)
-            )
-
-            # Entropy Term
             entr = -tf.reduce_sum(pred_probs * pred_log_probs, axis=-1)  # shape (batch, seq_len)
             entr = tf.reduce_mean(entr)  # Higher positive value means more exploration - shape (batch,)
-
-        black_grads = tape.gradient(black_policy_loss, self.c_actor.trainable_variables)
-        self.black_optimizer.apply_gradients(zip(black_grads, self.c_actor.trainable_variables))
+            loss = loss - (self.entropy_coef * entr)
 
 
-        # Combined loss calc
-        # with tf.GradientTape() as tape:
-        #     pred_probs, pred_vals = self.c_actor(observation_buffer)  # shape: (batch, seq_len, 2)
-        #     pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
-        #     pred_log_probs = tf.math.log(pred_probs)  # shape: (batch, seq_len, 2)
-        #
-        #     logprobability = tf.reduce_sum(
-        #         tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
-        #     )  # shape (batch, seq_len)
-        #     logprobability *= action_mask_tensor
-        #
-        #     # Total loss
-        #     loss = 0
-        #
-        #     # PPO Surrogate Loss
-        #     ratio = tf.exp(
-        #         logprobability - logprobability_buffer
-        #     )
-        #     min_advantage = tf.where(
-        #         combined_advantage_buffer > 0,
-        #         (1 + self.clip_ratio) * combined_advantage_buffer,
-        #         (1 - self.clip_ratio) * combined_advantage_buffer,
-        #     )
-        #     policy_loss = -tf.reduce_mean(
-        #         tf.minimum(ratio * combined_advantage_buffer, min_advantage)
-        #     )
-        #
-        #     loss += policy_loss
-        #
-        #     # Entropy Term
-        #     entr = -tf.reduce_sum(pred_probs * pred_log_probs, axis=-1)  # shape (batch, seq_len)
-        #     entr = tf.reduce_mean(entr)  # Higher positive value means more exploration - shape (batch,)
-        #     loss = loss - (self.entropy_coef * entr)
-        #
-        # policy_grads = tape.gradient(loss, self.c_actor.trainable_variables)
-        # self.actor_optimizer.apply_gradients(zip(policy_grads, self.c_actor.trainable_variables))
+        gradients = tape.gradient(loss, self.c_actor.trainable_variables)
+        self.actor_optimizer.apply_gradients(zip(gradients, self.c_actor.trainable_variables))
 
         #  KL Divergence
-        pred_probs, pred_vals = self.c_actor(observation_buffer)
+        pred_probs, pred_vals = self.c_actor_2(observation_buffer)
+
         pred_probs = tf.nn.softmax(pred_probs, axis=-1)
         pred_log_probs = tf.math.log(pred_probs)
         logprobability = tf.reduce_sum(
             tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
         )  # shape (batch, seq_len)
-        logprobability *= action_mask_tensor
+        color_logprobs = logprobability * color_action_mask_tensor
+        color_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
         kl = tf.reduce_mean(
-            logprobability_buffer - logprobability
+            color_logprobs_buffer - color_logprobs
         )
         kl = tf.reduce_sum(kl)
 
-        return kl, entr, white_policy_loss, black_policy_loss
+        return kl, entr, loss, policy_loss
+
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    ])
+    def train_actor_2(
+            self,
+            observation_buffer,
+            action_buffer,
+            logprobability_buffer,
+            action_mask_tensor,
+            color_action_mask_tensor,
+            color_advantage_buffer,
+    ):
+
+        # White loss calc
+        # print('--> White actor update')
+        with tf.GradientTape() as tape:
+            pred_probs, pred_vals = self.c_actor_2(observation_buffer)  # shape: (batch, seq_len, 2)
+
+            pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
+            pred_log_probs = tf.math.log(pred_probs)  # shape: (batch, seq_len, 2)
+
+            loss = 0
+            logprobability = tf.reduce_sum(
+                tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
+            )  # shape (batch, seq_len)
+            white_logprobs = logprobability * color_action_mask_tensor
+            white_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
+            white_ratio = tf.exp(
+                white_logprobs - white_logprobs_buffer
+            )
+            white_min_advantage = tf.where(
+                color_advantage_buffer > 0,
+                (1 + self.clip_ratio) * color_advantage_buffer,
+                (1 - self.clip_ratio) * color_advantage_buffer,
+            )
+            policy_loss = -tf.reduce_mean(
+                tf.minimum(white_ratio * color_advantage_buffer, white_min_advantage)
+            )
+            loss += policy_loss
+
+            entr = -tf.reduce_sum(pred_probs * pred_log_probs, axis=-1)  # shape (batch, seq_len)
+            entr = tf.reduce_mean(entr)  # Higher positive value means more exploration - shape (batch,)
+            loss = loss - (self.entropy_coef * entr)
+
+        gradients = tape.gradient(loss, self.c_actor_2.trainable_variables)
+        self.actor_optimizer_2.apply_gradients(zip(gradients, self.c_actor_2.trainable_variables))
+
+        #  KL Divergence
+        pred_probs, pred_vals = self.c_actor_2(observation_buffer)
+
+        pred_probs = tf.nn.softmax(pred_probs, axis=-1)
+        pred_log_probs = tf.math.log(pred_probs)
+        logprobability = tf.reduce_sum(
+            tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
+        )  # shape (batch, seq_len)
+        color_logprobs = logprobability * color_action_mask_tensor
+        color_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
+        kl = tf.reduce_mean(
+            color_logprobs_buffer - color_logprobs
+        )
+        kl = tf.reduce_sum(kl)
+
+        return kl, entr, loss, policy_loss
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None, None), dtype=tf.float32),
@@ -1057,34 +1025,50 @@ class SelfPlaySepGrad(AbstractTask):
         return value_loss
 
 
-
     def record(self, epoch_info):
         if epoch_info is None:
             return
 
+        # This maps additional info keys to shorthand labels for printing
+        display_keys = {
+            'model_1_return': 'ret1',
+            'model_2_return': 'ret2',
+            'game_len': 'gamelen',
+            'model_1_checkmates': 'chkm1',
+            'model_2_checkmates': 'chkm2',
+            'model_1_illegal_moves': 'ill1',
+            'model_2_illegal_moves': 'ill2',
+            'model_1_entropy': 'ent1',
+            'model_2_entropy': 'ent2',
+            'model_1_kl': 'kl1',
+            'model_2_kl': 'kl2',
+            'model_1_loss': 'l1',
+            'model_2_loss': 'l2',
+
+        }
+        display_key_keys = list(display_keys.keys())
         # Record new epoch / print
         if self.debug is True:
             print(f"SelfPlay {self.run_num} - {self.curr_epoch} ", end=' ')
-            for key, value in epoch_info.items():
-                if isinstance(value, list):
-                    print(f"{key}: {value}", end=' | ')
-                else:
-                    print("%s: %.5f" % (key, value), end=' | ')
-            print('actor_updates:', self.actor_updates)
-
+            for key in display_key_keys:
+                disp_key = display_keys[key]
+                value = self.additional_info[key]
+                print(f"{disp_key}: {value[-1]:.4f}", end=' | ')
+            print(self.actor_updates)
 
         # Update metrics
         self.returns.append(epoch_info['mb_return'])
         self.c_loss.append(epoch_info['c_loss'])
-        self.p_loss.append(epoch_info['w_loss'] + epoch_info['b_loss'])
+        self.p_loss.append(epoch_info['a1_loss'])
         self.p_iter.append(epoch_info['p_iter'])
-        self.entropy.append(epoch_info['entropy'])
-        self.kl.append(epoch_info['kl'])
+        self.entropy.append(epoch_info['a1_entropy'])
+        self.kl.append(epoch_info['a1_kl'])
 
         if len(self.entropy) % self.plot_freq == 0:
             print('--> PLOTTING')
-            self.run_evals()
             self.plot_ppo()
+            self.plot_models()
+            self.run_evals()
         else:
             return
 
@@ -1092,35 +1076,41 @@ class SelfPlaySepGrad(AbstractTask):
         if run_evals is False:
             return
         evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
+
+        # Evals for model 1
         eval_history = self.eval.run_eval(self.c_actor, themes=evals)
         eval_history['step_interval'] = global_mini_batch_size
-        save_name = 'evals_val_' + str(self.val_itr) + '.png'
+        save_name = 'a1_evals_val_' + str(self.val_itr) + '.png'
         plot_training_comparison([eval_history], bounds=False, save_name=save_name, local_save_dir=self.run_dir)
 
+        # Evals for model 2
+        eval_history = self.eval2.run_eval(self.c_actor_2, themes=evals)
+        eval_history['step_interval'] = global_mini_batch_size
+        save_name = 'a2_evals_val_' + str(self.val_itr) + '.png'
+        plot_training_comparison([eval_history], bounds=False, save_name=save_name, local_save_dir=self.run_dir)
 
     def plot_ppo(self):
 
         # --- Plotting ---
         epochs = [x for x in range(len(self.returns))]
         gs = gridspec.GridSpec(2, 2)
-        fig = plt.figure(figsize=(16, 8))  # default [6.4, 4.8], W x H  9x6, 12x8
+        fig = plt.figure(figsize=(12, 6.5))  # default [6.4, 4.8], W x H  9x6, 12x8
         fig.suptitle('Results', fontsize=16)
 
         # Returns plot
         plt.subplot(gs[0, 0])
-        plt.plot(epochs, self.returns)
+        # plt.plot(epochs, self.returns)
+        plt.plot(epochs, self.additional_info['model_1_return'], label='Model 1')
+        plt.plot(epochs, self.additional_info['model_2_return'], label='Model 2')
         plt.xlabel('Epoch')
         plt.ylabel('Mini-batch Return')
         plt.title('PPO Return Plot')
+        plt.legend()
 
         # Critic loss plot
         plt.subplot(gs[0, 1])
-        if len(self.c_loss) < 100:
-            c_loss = self.c_loss
-            c_epochs = epochs
-        else:
-            c_loss = self.c_loss[50:]
-            c_epochs = epochs[50:]
+        c_loss = self.c_loss
+        c_epochs = epochs
         plt.plot(c_epochs, c_loss)
         plt.xlabel('Epoch')
         plt.ylabel('Critic loss')
@@ -1128,17 +1118,23 @@ class SelfPlaySepGrad(AbstractTask):
 
         # Policy entropy plot
         plt.subplot(gs[1, 0])
-        plt.plot(epochs, self.entropy)
+        # plt.plot(epochs, self.entropy)
+        plt.plot(epochs, self.additional_info['model_1_entropy'], label='Model 1')
+        plt.plot(epochs, self.additional_info['model_2_entropy'], label='Model 2')
         plt.xlabel('Epoch')
         plt.ylabel('Entropy')
         plt.title('Policy Entropy Plot')
+        plt.legend()
 
         # KL divergence plot
         plt.subplot(gs[1, 1])
-        plt.plot(epochs, self.kl)
+        # plt.plot(epochs, self.kl)
+        plt.plot(epochs, self.additional_info['model_1_kl'], label='Model 1')
+        plt.plot(epochs, self.additional_info['model_2_kl'], label='Model 2')
         plt.xlabel('Epoch')
         plt.ylabel('KL')
         plt.title('KL Divergence Plot')
+        plt.legend()
 
         # Save and close
         plt.tight_layout()
@@ -1147,26 +1143,85 @@ class SelfPlaySepGrad(AbstractTask):
         plt.savefig(save_path)
         plt.close('all')
 
+    def plot_models(self):
+
+        game_epochs = [x * global_mini_batch_size for x in range(len(self.additional_info['model_1_win_predictions']))]
+
+        # --- Plotting ---
+        epochs = [x for x in range(len(self.additional_info['model_1_win_predictions']))]
+        gs = gridspec.GridSpec(1, 3)
+        fig = plt.figure(figsize=(12, 4))  # default [6.4, 4.8], W x H  9x6, 12x8
+        fig.suptitle('Results', fontsize=16)
+
+
+        # Model illegal moves
+        plt.subplot(gs[0, 0])
+        plt.plot(epochs, self.additional_info['model_1_illegal_moves'], label='Model 1')
+        plt.plot(epochs, self.additional_info['model_2_illegal_moves'], label='Model 2')
+        plt.xlabel('Epochs')
+        plt.ylabel('Illegal Moves')
+        plt.legend()
+        plt.title('Illegal Moves')
+
+        # Model checkmates
+        plt.subplot(gs[0, 1])
+        plt.plot(epochs, self.additional_info['model_1_checkmates'], label='Model 1')
+        plt.plot(epochs, self.additional_info['model_2_checkmates'], label='Model 2')
+        plt.xlabel('Epochs')
+        plt.ylabel('Checkmates')
+        plt.legend()
+        plt.title('Checkmates')
+
+        # Model win predictions
+        plt.subplot(gs[0, 2])
+        plt.plot(epochs, self.additional_info['model_1_win_predictions'], label='Model 1')
+        plt.plot(epochs, self.additional_info['model_2_win_predictions'], label='Model 2')
+        plt.xlabel('Epochs')
+        plt.ylabel('Win Predictions')
+        plt.legend()
+        plt.title('Win Predictions')
+
+        # Save and close
+        plt.tight_layout()
+        save_path = os.path.join(self.run_dir, 'model_plots_'+str(self.val_itr)+'.png')
+        plt.savefig(save_path)
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == '__main__':
     actor_path = config.model_path
+    actor_2_path = config.model_path
     critic_path = config.model_path
 
-    # actor_path = os.path.join(config.results_dir, 'run_100', 'pretrained', 'actor_weights_2000')
-    # critic_path = os.path.join(config.results_dir, 'run_100', 'pretrained', 'critic_weights_2000')
+    actor_path = os.path.join(config.results_dir, 'run_1003', 'pretrained', 'actor_weights_50')
+    actor_2_path = os.path.join(config.results_dir, 'run_1003', 'pretrained', 'actor_weights_2_50')
+    critic_path = os.path.join(config.results_dir, 'run_1003', 'pretrained', 'critic_weights_50')
 
-    # actor_path = None
-    # critic_path = None
-
-    task = SelfPlaySepGrad(
+    task = SelfPlayVsTask(
         run_num=run_dir,
         problem=None,
-        epochs=10000,
+        epochs=100000,
         actor_load_path=actor_path,
+        actor_2_load_path=actor_2_path,
         critic_load_path=critic_path,
         debug=True,
         run_val=False,
         val_itr=run_dir_itr,
     )
-    # task.get_even_mask([x for x in range(10)])
     task.run()
+
+
+
+
+
+
+
+
