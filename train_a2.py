@@ -20,6 +20,9 @@ from model import get_pretrain_model_a2 as get_model
 
 # curr_dataset = config.pt_dataset
 curr_dataset = os.path.join(config.datasets_dir, 'dataset-arch2-lc0')
+# Train dataset cardinality: 16110
+# Val dataset cardinality: 1124
+
 
 # save_model = config.model_path
 save_model = os.path.join(config.weights_dir, 'chess-gpt-a5')

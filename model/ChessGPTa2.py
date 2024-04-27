@@ -47,6 +47,8 @@ class ChessGPTa2(tf.keras.Model):
         self.norm_first = False
         self.decoder_1 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         self.decoder_2 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        self.decoder_3 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        self.decoder_4 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
 
 
         # Move Prediction Head
@@ -91,6 +93,20 @@ class ChessGPTa2(tf.keras.Model):
             training=training
         )
         decoded_move = self.decoder_2(
+            decoded_move,
+            encoder_sequence=opp_move_embeddings,
+            encoder_attention_mask=causal_cross_mask,
+            use_causal_mask=True,
+            training=training
+        )
+        decoded_move = self.decoder_3(
+            decoded_move,
+            encoder_sequence=opp_move_embeddings,
+            encoder_attention_mask=causal_cross_mask,
+            use_causal_mask=True,
+            training=training
+        )
+        decoded_move = self.decoder_4(
             decoded_move,
             encoder_sequence=opp_move_embeddings,
             encoder_attention_mask=causal_cross_mask,
