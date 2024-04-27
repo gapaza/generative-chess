@@ -398,7 +398,7 @@ if __name__ == '__main__':
 
     # checkpoint_path = config.model_path
 
-    model_name = 'chess-gpt-a2'
+    model_name = 'chess-gpt-a3'
     checkpoint_path = os.path.join(config.weights_dir, model_name)
     model = get_model(checkpoint_path=checkpoint_path)
 

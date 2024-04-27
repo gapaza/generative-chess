@@ -31,7 +31,7 @@ def worker(puzzle):
 
 small_ds = False
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'games-a2-full-128b')
+curr_dataset = os.path.join(config.datasets_dir, 'games-a2-human-128b')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -40,6 +40,8 @@ if not os.path.exists(curr_dataset):
 # ------------------------------
 uci_dir = os.path.join(config.games_dir, 'combined')
 lc0_dir = os.path.join(config.games_dir, 'lc0')
+use_lc0 = False
+
 
 
 class A2_DatasetGenerator:
@@ -76,7 +78,9 @@ class A2_DatasetGenerator:
             move_files = move_files[:6]
             lc0_files = lc0_files[:6]
 
-        all_files = move_files + lc0_files
+        all_files = move_files
+        if use_lc0:
+            all_files.extend(lc0_files)
         random.shuffle(all_files)
 
         train_files = all_files[:int(len(all_files) * 0.94)]
@@ -219,6 +223,18 @@ class A2_DatasetGenerator:
 
 
 
+    def load_datasets(self):
+        train_dataset = tf.data.Dataset.load(self.train_dataset_dir)
+        val_dataset = tf.data.Dataset.load(self.val_dataset_dir)
+        return train_dataset, val_dataset
+
+
+    def debug_datasets(self):
+        train_dataset, val_dataset = self.load_datasets()
+
+        # Print cardinality of datasets
+        print('Train dataset cardinality:', train_dataset.cardinality().numpy())
+        print('Val dataset cardinality:', val_dataset.cardinality().numpy())
 
 
 
@@ -230,6 +246,7 @@ if __name__ == '__main__':
 
     generator = A2_DatasetGenerator(curr_dataset)
     generator.get_dataset(save=True, small=small_ds)
+    generator.debug_datasets()
 
 
 

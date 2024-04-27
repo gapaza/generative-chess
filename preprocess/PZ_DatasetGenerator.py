@@ -5,7 +5,7 @@ import tensorflow as tf
 from tqdm import tqdm
 import concurrent.futures
 import random
-import chessl
+import chess
 import warnings
 import pickle
 import threading
