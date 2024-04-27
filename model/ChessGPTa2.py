@@ -138,12 +138,12 @@ class ChessGPTa2(tf.keras.Model):
 
 
     def train_step(self, inputs):
-        model_inputs, model_labels, cross_inputs, is_white = inputs
+        model_inputs, model_labels, cross_inputs, is_white, sample_weights = inputs
         m_inputs = [model_inputs, cross_inputs, is_white]
         with tf.GradientTape() as tape:
             # Forward Pass
             predictions, val_predcitions = self(m_inputs, training=True)
-            buloss = self.pt_loss_fn(model_labels, predictions)
+            buloss = self.pt_loss_fn(model_labels, predictions, sample_weight=sample_weights)
 
             # DISTRIBUTED TRAINING
             if config.distributed is True:
@@ -164,17 +164,15 @@ class ChessGPTa2(tf.keras.Model):
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
         self.pt_loss_tracker.update_state(buloss)
-        self.pt_perplexity_tracker.update_state(model_labels, predictions)
+        self.pt_perplexity_tracker.update_state(model_labels, predictions, sample_weight=sample_weights)
 
         return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result()}
 
     def test_step(self, inputs):
-        # input_sequences, target_sequences = inputs
-        # input_sequences, target_sequences, piece_types = inputs
-        model_inputs, model_labels, cross_inputs, is_white = inputs
+        model_inputs, model_labels, cross_inputs, is_white, sample_weights = inputs
         m_inputs = [model_inputs, cross_inputs, is_white]
         predictions, val_predcitions = self(m_inputs, training=False)
-        bloss = self.pt_loss_fn(model_labels, predictions)
+        bloss = self.pt_loss_fn(model_labels, predictions, sample_weights=sample_weights)
 
         # DISTRIBUTED TRAINING
         if config.distributed is True:
@@ -183,7 +181,7 @@ class ChessGPTa2(tf.keras.Model):
             loss = bloss
 
         self.pt_loss_tracker.update_state(loss)
-        self.pt_perplexity_tracker.update_state(model_labels, predictions)
+        self.pt_perplexity_tracker.update_state(model_labels, predictions, sample_weight=sample_weights)
 
         return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result()}
 

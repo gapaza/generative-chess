@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from matplotlib import gridspec
 
 # from stockfish.rewards.reward_1 import calc_reward
-from stockfish.rewards.reward_2 import calc_reward
+from stockfish.rewards.reward_2 import calc_reward, calc_reward_slice
 
 
 def discounted_cumulative_sums(x, discount):
@@ -35,6 +35,12 @@ class RewardShaping:
         mask = [x % 2 for x in mask]
         mask = [1 - x for x in mask]
         return mask
+
+    def game_reward_slice(self, uci_moves , nodes=200000):
+        rewards, sample_weights = calc_reward_slice(self.engine, uci_moves, [6, 8], n=nodes)
+        print(rewards)
+        print(sample_weights)
+
 
 
     def game_reward_viz(self, uci_moves, save_file='rewards.png', nodes=200000):
@@ -157,7 +163,8 @@ e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 f1e2 e7e5 d4b3 f8e7 e1g1 e8g8 
     # print(client.get_even_mask([0 for _ in range(10)]))
     # exit(0)
 
-    client.game_reward_viz(uci_moves, nodes=50000)
+    # client.game_reward_viz(uci_moves, nodes=50000)
+    client.game_reward_slice(uci_moves)
 
 
     # client.game_reward_viz(uci_moves, save_file='rewards_10k.png', nodes=10000)

@@ -203,11 +203,12 @@ class Arch2Evals:
             theme_puzzle_map[theme] = all_theme_puzzles
 
         theme_dataset_map = {}
-        for theme, puzzles in theme_puzzle_map.items():
-            dataset = self.get_puzzle_dataset(puzzles)
+        for theme, pzs in theme_puzzle_map.items():
+            dataset = self.get_puzzle_dataset(pzs)
             theme_path = self.themes_path[theme]
             dataset.save(theme_path)
             theme_dataset_map[theme] = dataset
+
 
         return theme_dataset_map
 
@@ -337,7 +338,6 @@ class Arch2Evals:
         predictions, val_predictions = model(inputs, training=False)
         return predictions, val_predictions
 
-
     # ---------------------------------
     # Plotting
     # ---------------------------------
@@ -398,7 +398,7 @@ if __name__ == '__main__':
 
     # checkpoint_path = config.model_path
 
-    model_name = 'chess-gpt-a3'
+    model_name = 'chess-gpt-a5'
     checkpoint_path = os.path.join(config.weights_dir, model_name)
     model = get_model(checkpoint_path=checkpoint_path)
 
