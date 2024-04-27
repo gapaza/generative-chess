@@ -67,7 +67,7 @@ stockfish_path = '/home/ubuntu/engines/Stockfish-sf_16.1/src/stockfish'
 #      |_|  |_| \___/  \__,_| \___||_|
 #
 
-model_path = os.path.join(weights_dir, 'chess-gpt-a2')
+model_path = os.path.join(weights_dir, 'chess-gpt-a5')
 
 # Small Model
 dense_dim_small = 4096  # 512 small, 2048 nominal
@@ -88,7 +88,7 @@ seq_length = 128  # 128 nominal
 dropout = 0.1
 
 # --> Training
-pt_dataset = os.path.join(datasets_dir, 'games-a2-full-128b')
+pt_dataset = os.path.join(datasets_dir, 'dataset-arch2-lc0')
 epochs = 200
 epoch_steps = 3000
 val_steps = 200

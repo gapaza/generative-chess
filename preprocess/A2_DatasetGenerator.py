@@ -31,7 +31,7 @@ def worker(puzzle):
 
 small_ds = False
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'games-a2-human-128b')
+curr_dataset = os.path.join(config.datasets_dir, 'dataset-arch2-lc0')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -40,7 +40,7 @@ if not os.path.exists(curr_dataset):
 # ------------------------------
 uci_dir = os.path.join(config.games_dir, 'combined')
 lc0_dir = os.path.join(config.games_dir, 'lc0')
-use_lc0 = False
+use_lc0 = True
 
 
 
@@ -93,6 +93,7 @@ class A2_DatasetGenerator:
         all_train_dp = []
         for dp in train_dp:
             all_train_dp.extend(dp)
+        random.shuffle(all_train_dp)
         print('Finished processing train files')
 
         val_dp = []
