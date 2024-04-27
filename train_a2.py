@@ -19,7 +19,7 @@ from preprocess.PTP_DatasetGenerator import PTP_DatasetGenerator
 from model import get_pretrain_model_a2 as get_model
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'games-a2-human-128b')
+curr_dataset = os.path.join(config.datasets_dir, 'games-a2-full-128b')
 
 # save_model = config.model_path
 save_model = os.path.join(config.weights_dir, 'chess-gpt-a4')
@@ -46,13 +46,12 @@ def train():
 
     # 6. Train Model
     if config.distributed is True:
-        steps_per_epoch, validation_steps = calc_dataset_cardinality()
         history = model.fit(
             train_dataset,
             epochs=config.epochs,
             validation_data=val_dataset,
-            steps_per_epoch=steps_per_epoch,
-            validation_steps=validation_steps,
+            steps_per_epoch=config.epoch_steps,
+            validation_steps=config.val_steps,
             callbacks=checkpoints
         )
     else:
@@ -80,15 +79,6 @@ def train():
 #                   | |
 #                   |_|
 #
-
-def calc_dataset_cardinality():
-    curr_batch_size = 128
-    curr_cardinality = 63333  # 143801
-    new_batch_size = config.global_batch_size
-    new_cardinality = (curr_cardinality * curr_batch_size) // new_batch_size
-    curr_val_cardinality = 3000
-    new_val_cardinality = (curr_val_cardinality * curr_batch_size) // new_batch_size
-    return new_cardinality, new_val_cardinality
 
 def get_dataset():
     dataset_generator = PTP_DatasetGenerator(curr_dataset)

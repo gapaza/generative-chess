@@ -90,6 +90,8 @@ dropout = 0.1
 # --> Training
 pt_dataset = os.path.join(datasets_dir, 'games-a2-full-128b')
 epochs = 200
+epoch_steps = 3000
+val_steps = 200
 global_batch_size = 128 * 16  # 64, 128, 256, 512, 1024
 
 
