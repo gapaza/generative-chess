@@ -101,6 +101,33 @@ def get_pretrain_model_a2(checkpoint_path=None):
     return model
 
 
+def get_rl_models_a2(checkpoint_actor_1=None, checkpoint_actor_2=None, checkpoint_critic=None):
+    model_input = tf.ones((1, config.seq_length))
+    cross_input = tf.ones((1, config.seq_length))
+    is_white = tf.convert_to_tensor([True])
+
+    actor_1_model = ChessGPTa2()
+    actor_1_model([model_input, cross_input, is_white])
+
+    actor_2_model = ChessGPTa2()
+    actor_2_model([model_input, cross_input, is_white])
+
+    critic_model = ChessGPTa2()
+    critic_model([model_input, cross_input, is_white])
+
+    if checkpoint_actor_1:
+        actor_1_model.load_weights(checkpoint_actor_1).expect_partial()
+
+    if checkpoint_actor_2:
+        actor_2_model.load_weights(checkpoint_actor_2).expect_partial()
+
+    if checkpoint_critic:
+        critic_model.load_weights(checkpoint_critic).expect_partial()
+
+    actor_1_model.summary()
+    return actor_1_model, actor_2_model, critic_model
+
+
 
 
 
