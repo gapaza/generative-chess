@@ -19,10 +19,10 @@ from preprocess.PTP_DatasetGenerator import PTP_DatasetGenerator
 from model import get_pretrain_model_a2 as get_model
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'games-a2-full-128b')
+curr_dataset = os.path.join(config.datasets_dir, 'games-a2-human-128b')
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-a3')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-a4')
 
 load_model = None
 # load_model = curr_model
@@ -46,8 +46,8 @@ def train():
 
     # 6. Train Model
     if config.distributed is True:
-        history = steps_per_epoch, validation_steps = calc_dataset_cardinality()
-        model.fit(
+        steps_per_epoch, validation_steps = calc_dataset_cardinality()
+        history = model.fit(
             train_dataset,
             epochs=config.epochs,
             validation_data=val_dataset,
