@@ -12,7 +12,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import pandas as pd
 import multiprocessing
-multiprocessing.set_start_method('fork', force=True)
+# multiprocessing.set_start_method('fork', force=True)
 
 
 
@@ -20,6 +20,7 @@ multiprocessing.set_start_method('fork', force=True)
 
 def process_puzzles(puzzles_path, num_procs=12):
     puzzles = load_puzzles(puzzles_path)
+    # puzzles = puzzles[:1000]
     with multiprocessing.Pool(num_procs) as pool:
         train_dp = pool.map(process_puzzle, puzzles)
     return train_dp
@@ -86,7 +87,7 @@ def process_puzzle(puzzle):
     end_sample_weight_idx = len(model_labels)
     for idx in range(start_sample_weight_idx, end_sample_weight_idx):
         sample_weights[idx] = 1
-
+    # sample_weights = tf.convert_to_tensor(sample_weights, dtype=tf.int16)
     datapoint = [
         ' '.join(model_inputs),
         ' '.join(model_labels),

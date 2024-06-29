@@ -45,8 +45,12 @@ def plot_training_comparison(history_files, labels=None, save_name=None, bounds=
         for j, history_steps in enumerate(all_history_steps):
             last_val = history_files_json[j][eval_name][-1]
             label = labels[j] + ' (' + str(round(last_val, 2)) + ')'
+            y_vals = history_files_json[j][eval_name]
             plt.plot(history_steps, history_files_json[j][eval_name], label=label)
-        plt.title(eval_name)
+            diff = y_vals[-1] - y_vals[0]
+
+        plt.title(eval_name + ' ' + str(round(diff, 2)))
+        # plt.title(eval_name)
         plt.xlabel('Step')
         plt.ylabel('Accuracy')
         if bounds is True:

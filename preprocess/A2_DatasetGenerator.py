@@ -30,7 +30,7 @@ multiprocessing.set_start_method('fork', force=True)
 # ------------------------------
 small_ds = False
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'dataset-arch2-human-lc0-pz')
+curr_dataset = os.path.join(config.datasets_dir, 'dataset-arch2-human-pz')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -39,7 +39,7 @@ if not os.path.exists(curr_dataset):
 # ------------------------------
 uci_dir = os.path.join(config.games_dir, 'combined')
 lc0_dir = os.path.join(config.games_dir, 'lc0')
-use_lc0 = True
+use_lc0 = False
 
 # ------------------------------
 # Puzzles
@@ -114,7 +114,7 @@ class A2_DatasetGenerator:
             print('Processing Puzzles')
             puzzle_dp = process_puzzles(self.puzzles_path)
             all_train_dp.extend(puzzle_dp)
-        print('Shuffling train files')
+        print('Shuffling train datapoints')
         random.shuffle(all_train_dp)
         print('Finished processing train files')
 
@@ -135,7 +135,9 @@ class A2_DatasetGenerator:
         # ------------------------------
         # Parse Datasets
         # ------------------------------
+        print('Parsing train dataset', len(all_train_dp))
         train_dataset = self.parse_dataset(all_train_dp)
+        print('Parsing val dataset', len(all_val_dp))
         val_dataset = self.parse_dataset(all_val_dp)
         # train_dataset = self.parse_reward_dataset(all_train_dp)
         # val_dataset = self.parse_reward_dataset(all_val_dp)
@@ -252,6 +254,7 @@ class A2_DatasetGenerator:
         with open(move_file, 'r') as f:
             lines = f.readlines()
             # progress_bar = tqdm(lines, desc='Parsing UCI file')
+            # print('Processing file...')
             for line in lines:
                 # progress_bar.update(1)
 
@@ -290,6 +293,9 @@ class A2_DatasetGenerator:
                         break
                     black_sample_weights[idx] = 1
 
+                # white_sample_weights = tf.convert_to_tensor(white_sample_weights, dtype=tf.int16)
+                # black_sample_weights = tf.convert_to_tensor(black_sample_weights, dtype=tf.int16)
+
                 white_datapoint = [
                     ' '.join(white_inputs),
                     ' '.join(white_labels),
@@ -314,12 +320,31 @@ class A2_DatasetGenerator:
     # ------------------------------
 
     def parse_dataset(self, datapoints):
+        # p1, p2, p3, p4, p5 = zip(*datapoints)
+
+        print('Unpacking dataset')
         p1 = [x[0] for x in datapoints]
         p2 = [x[1] for x in datapoints]
         p3 = [x[2] for x in datapoints]
         p4 = [x[3] for x in datapoints]
         p5 = [x[4] for x in datapoints]
+
+        p1 = tf.convert_to_tensor(p1, dtype=tf.string)
+        p2 = tf.convert_to_tensor(p2, dtype=tf.string)
+        p3 = tf.convert_to_tensor(p3, dtype=tf.string)
+        p4 = tf.convert_to_tensor(p4, dtype=tf.bool)
+        p5 = tf.convert_to_tensor(p5, dtype=tf.int16)
+
+        # print('Unzipped dataset')
+        # print('First p1:', p1[0])
+        # print('First p2:', p2[0])
+        # print('First p3:', p3[0])
+        # print('First p4:', p4[0])
+        # print('First p5:', p5[0], len(p5[0]))
+
+        print('Creating dataset')
         dataset = tf.data.Dataset.from_tensor_slices((p1, p2, p3, p4, p5))
+        print('Created dataset')
         dataset = dataset.batch(config.global_batch_size)
         dataset = dataset.map(color_masking.preprocess_batch, num_parallel_calls=tf.data.AUTOTUNE)
         return dataset
