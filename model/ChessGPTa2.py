@@ -22,6 +22,8 @@ heads = config.heads
 embed_dim = config.embed_dim
 
 
+temperature = 1.0
+
 
 
 @keras.saving.register_keras_serializable(package="ChessGPTa2", name="ChessGPTa2")
@@ -116,6 +118,7 @@ class ChessGPTa2(tf.keras.Model):
 
         # Move Prediction Head
         move_predictions = self.move_prediction_head(decoded_move)
+        move_predictions = move_predictions / temperature
 
         # Value Prediction Head
         value_predictions = self.value_prediction_head(decoded_move)

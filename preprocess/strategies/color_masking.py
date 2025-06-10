@@ -76,7 +76,7 @@ def preprocess_batch(model_inputs, model_labels, opp_inputs, is_white, sample_we
     model_inputs_encoded = tf.cast(model_inputs_encoded, tf.int16)
     opp_inputs_encoded = tf.cast(opp_inputs_encoded, tf.int16)
     sample_weights = tf.cast(sample_weights, tf.int16)
-    return  model_inputs_encoded, model_labels_encoded, opp_inputs_encoded, is_white, sample_weights
+    return model_inputs_encoded, model_labels_encoded, opp_inputs_encoded, is_white, sample_weights
 
 
 
@@ -91,6 +91,10 @@ def preprocess_reward_batch(model_inputs, model_labels, opp_inputs, is_white, re
     rewards = tf.cast(rewards, tf.float16)
     rewards_sample_weights = tf.cast(rewards_sample_weights, tf.float16)
     return  model_inputs_encoded, model_labels_encoded, opp_inputs_encoded, is_white, rewards, rewards_sample_weights
+
+
+
+
 
 
 

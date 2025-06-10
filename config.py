@@ -6,7 +6,7 @@ import platform
 
 
 # Tensorflow Core
-mixed_precision = True
+mixed_precision = False
 if platform.system() != 'Darwin':
     if mixed_precision is True:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
@@ -19,7 +19,7 @@ print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('
 
 
 # Distributed Training
-distributed = True
+distributed = False
 mirrored_strategy = tf.distribute.MirroredStrategy()
 
 
@@ -85,14 +85,14 @@ num_experts = 8   # 2 small, 8 nominal
 seq_length = 128  # 128 nominal
 
 # --> Dropout
-dropout = 0.1
+dropout = 0.0
 
 # --> Training
 pt_dataset = os.path.join(datasets_dir, 'dataset-arch2-lc0')
 epochs = 200
 epoch_steps = 3000  # 16110
 val_steps = 1000    # 1124
-global_batch_size = 128 * 16  # 64, 128, 256, 512, 1024
+global_batch_size = 128  # * 16  # 64, 128, 256, 512, 1024
 
 
 

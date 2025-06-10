@@ -42,6 +42,7 @@ class AbstractTask:
         self.c_actor = None
         self.c_actor_2 = None
         self.c_critic = None
+        self.mse_loss = None
 
         # Logging
         self.returns = []

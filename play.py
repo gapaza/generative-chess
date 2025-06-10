@@ -18,7 +18,7 @@ def run_old():
 
 if __name__ == '__main__':
     model_path = os.path.join(config.weights_dir, 'chess-gpt-a5')
-    api = ChessGPTa2_API(model_path=model_path, user_plays_white=True)
+    api = ChessGPTa2_API(model_path=model_path, user_plays_white=False)
     api.play_interactive_game()
 
 

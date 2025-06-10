@@ -1,51 +1,10 @@
 import config
 import chess
-import chess.engine
 import chess.pgn
-import io
-from itertools import zip_longest
 import os
 
 
-
-def get_stockfish(threads=12):
-    engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
-    engine.configure({'Threads': threads, "Hash": 4096})
-    return engine
-
-
-
-
-def pgn_to_uci(pgn):
-    pgn = io.StringIO(pgn)
-
-    # read game from pgn string
-    game = chess.pgn.read_game(pgn)
-
-    # create board from game
-    board = game.board()
-
-    # iterate through moves and play them on the board
-    uci_moves = []
-    for move in game.mainline_moves():
-        uci_move = move.uci()
-        uci_moves.append(uci_move)
-    uci_moves = " ".join(uci_moves)
-    return uci_moves
-
-
-
-def combine_alternate(list1, list2):
-    # Combine elements from both lists alternately using zip_longest
-    # The fillvalue ensures that if one list is longer, None will not be added
-    combined = [item for pair in zip_longest(list1, list2, fillvalue='') for item in pair if
-                item is not object()]
-    combined = [x for x in combined if x != '']
-    return combined
-
-
-
-def save_game_pgn(game_moves, save_dir):
+def save_game_pgn(game_moves, save_dir, file_name='game.pgn'):
     uci_moves = [config.id2token[x] for x in game_moves]
     uci_moves_clipped = [x for x in uci_moves if x not in config.non_move_tokens]
 
@@ -69,7 +28,7 @@ def save_game_pgn(game_moves, save_dir):
     game.headers["Black"] = "Player2"
     game.headers["Result"] = "*"  # Or use board.result() if the game is over
 
-    pgn_path = os.path.join(save_dir, 'game.pgn')
+    pgn_path = os.path.join(save_dir, file_name)
     with open(pgn_path, "w") as pgn_file:
         exporter = chess.pgn.FileExporter(pgn_file)
         game.accept(exporter)
@@ -79,4 +38,43 @@ def save_game_pgn(game_moves, save_dir):
         pgn_file.write('\n\n')
         pgn_file.write(' '.join(uci_moves))
         pgn_file.write('\n\n')
+
+
+
+
+
+def get_inputs_from_game(game_move_ids, white_turn):
+    game = [x for x in game_move_ids if config.id2token[x] not in config.non_move_tokens]
+    white_moves = [config.token2id['[white]']]
+    black_moves = [config.token2id['[black]']]
+    for idx, obs in enumerate(game):
+        if idx % 2 == 0:
+            white_moves.append(obs)
+        else:
+            black_moves.append(obs)
+
+    if white_turn is True:
+        model_moves = white_moves
+        cross_moves = black_moves
+        inf_idx = len(white_moves) - 1
+    else:
+        model_moves = black_moves
+        cross_moves = white_moves
+        inf_idx = len(black_moves) - 1
+
+    return model_moves, cross_moves, inf_idx
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
