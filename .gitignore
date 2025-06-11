@@ -9,3 +9,4 @@ stockfish/stockfish
 commands.txt
 evals/out
 stockfish/save
+.DS_Store

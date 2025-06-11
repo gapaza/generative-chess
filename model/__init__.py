@@ -131,5 +131,17 @@ def get_rl_models_a2(checkpoint_actor_1=None, checkpoint_actor_2=None, checkpoin
 
 
 
+from model.ChessGPTa3 import ChessGPTa3
+
+def get_pretrain_model_a3(checkpoint_path=None):
+    model = ChessGPTa3()
+    model_input = tf.ones((1, config.seq_length))
+    cross_input = tf.ones((1, config.seq_length))
+    is_white = tf.convert_to_tensor([True])
+    model([model_input, cross_input, is_white])
+    if checkpoint_path:
+        model.load_weights(checkpoint_path).expect_partial()
+    model.summary()
+    return model
 
 
