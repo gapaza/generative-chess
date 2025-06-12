@@ -59,6 +59,10 @@ class ChessGPTa3(tf.keras.Model):
         self.decoder_2 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         self.decoder_3 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
         self.decoder_4 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        self.decoder_5 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        self.decoder_6 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        self.decoder_7 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
+        self.decoder_8 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=config.dropout)
 
 
         # Move Prediction Head
@@ -99,28 +103,56 @@ class ChessGPTa3(tf.keras.Model):
             decoded_move,
             encoder_sequence=opp_move_embeddings,
             encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True,
+            use_causal_mask=True, use_casual_cross_mask=True,
             training=training
         )
         decoded_move = self.decoder_2(
             decoded_move,
             encoder_sequence=opp_move_embeddings,
             encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True,
+            use_causal_mask=True, use_casual_cross_mask=True,
             training=training
         )
         decoded_move = self.decoder_3(
             decoded_move,
             encoder_sequence=opp_move_embeddings,
             encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True,
+            use_causal_mask=True, use_casual_cross_mask=True,
             training=training
         )
         decoded_move = self.decoder_4(
             decoded_move,
             encoder_sequence=opp_move_embeddings,
             encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True,
+            use_causal_mask=True, use_casual_cross_mask=True,
+            training=training
+        )
+        decoded_move = self.decoder_5(
+            decoded_move,
+            encoder_sequence=opp_move_embeddings,
+            encoder_attention_mask=causal_cross_mask,
+            use_causal_mask=True, use_casual_cross_mask=True,
+            training=training
+        )
+        decoded_move = self.decoder_6(
+            decoded_move,
+            encoder_sequence=opp_move_embeddings,
+            encoder_attention_mask=causal_cross_mask,
+            use_causal_mask=True, use_casual_cross_mask=True,
+            training=training
+        )
+        decoded_move = self.decoder_7(
+            decoded_move,
+            encoder_sequence=opp_move_embeddings,
+            encoder_attention_mask=causal_cross_mask,
+            use_causal_mask=True, use_casual_cross_mask=True,
+            training=training
+        )
+        decoded_move = self.decoder_8(
+            decoded_move,
+            encoder_sequence=opp_move_embeddings,
+            encoder_attention_mask=causal_cross_mask,
+            use_causal_mask=True, use_casual_cross_mask=True,
             training=training
         )
 

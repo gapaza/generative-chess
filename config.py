@@ -5,6 +5,25 @@ import tensorflow as tf
 import platform
 
 
+
+# --------------------------------------------------------------
+# Zaratan (HPC)
+# --------------------------------------------------------------
+using_hpc = True
+AVAILABLE_CPUS = 30
+if using_hpc is True:
+    slurm_cpu_ids = os.getenv('SLURM_JOB_CPUS_PER_NODE')
+    num_cpus = int(slurm_cpu_ids.split('(')[0])  # handles formats like "32(x2)"
+    # allocated_cpus = list(range(num_cpus))
+    start_cpu_id = list(os.sched_getaffinity(0))[0]  # Get the first CPU ID
+    allocated_cpus = list(range(start_cpu_id, start_cpu_id + num_cpus))
+    print(f"Set CPU affinity to CPUs: {allocated_cpus}")
+    os.sched_setaffinity(0, allocated_cpus)
+    AVAILABLE_CPUS = num_cpus - 2
+
+
+
+
 # Tensorflow Core
 mixed_precision = False
 if platform.system() != 'Darwin':
@@ -92,7 +111,7 @@ pt_dataset = os.path.join(datasets_dir, 'dataset-arch2-lc0')
 epochs = 200
 epoch_steps = 3000  # 16110
 val_steps = 1000    # 1124
-global_batch_size = 4  # * 16  # 64, 128, 256, 512, 1024
+global_batch_size = 32  # * 16  # 64, 128, 256, 512, 1024
 
 
 

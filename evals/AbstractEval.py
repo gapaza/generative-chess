@@ -80,20 +80,21 @@ puzzles_dir = os.path.join(config.datasets_dir, 'puzzles')
 
 
 @tf.function
-def encode_moves(input_seq, label_seq, piece_encoding, mask):
+def encode_moves(input_seq, label_seq, cross_seq, mask, is_white):
     input_seq = config.encode_tf(input_seq)
     label_seq = config.encode_tf(label_seq)
+    cross_seq = config.encode_tf(cross_seq)
     # input_seq = tf.cast(input_seq, tf.int16)
     # label_seq = tf.cast(label_seq, tf.int16)
-    return input_seq, label_seq, piece_encoding, mask
+    return input_seq, label_seq, cross_seq, mask, is_white
 
 @tf.function
-def cast_vals(input_seq, label_seq, piece_encoding, mask):
+def cast_vals(input_seq, label_seq, cross_seq, mask, is_white):
     input_seq = tf.cast(input_seq, tf.int16)
     label_seq = tf.cast(label_seq, tf.int16)
-    piece_encoding = tf.cast(piece_encoding, tf.int16)
+    cross_seq = tf.cast(cross_seq, tf.int16)
     mask = tf.cast(mask, tf.float16)
-    return input_seq, label_seq, piece_encoding, mask
+    return input_seq, label_seq, cross_seq, mask, is_white
 
 
 
@@ -196,18 +197,20 @@ class AbstractEval:
     def process_puzzles(self, puzzles):
         input_sequences = []
         label_sequences = []
-        piece_encodings = []
+        cross_sequences = []
+        is_white = []
         masks = []
 
         for puzzle in puzzles:
-            input_sequence, label_sequence, piece_encoding, mask = self.process_puzzle(puzzle)
+            input_sequence, label_sequence, cross_sequence, mask, white_turn = self.process_puzzle(puzzle)
             input_sequences.append(input_sequence)
             label_sequences.append(label_sequence)
-            piece_encodings.append(piece_encoding)
+            cross_sequences.append(cross_sequence)
             masks.append(mask)
+            is_white.append(white_turn)
 
         dataset = tf.data.Dataset.from_tensor_slices(
-            (input_sequences, label_sequences, piece_encodings, masks)
+            (input_sequences, label_sequences, cross_sequences, masks, is_white)
         )
         dataset = dataset.batch(len(puzzles))
         # dataset = dataset.batch(256)
@@ -226,39 +229,58 @@ class AbstractEval:
 
         line = puzzle['line']
         line_moves = line.split(' ')
-        white_turn = (board.turn == chess.WHITE)
+        white_turn = (board.turn == chess.WHITE)  # Which color is solving the puzzle?
         for idx, move in enumerate(line_moves):
-            white_turn = (board.turn == chess.WHITE)
             board.push_uci(move)
 
-        # Create Input Sequence
-        input_sequence = ['[start]'] + moves + line_moves
-        input_sequence = ' '.join(input_sequence)
+        # Inputs for A3 model
+        if white_turn is True:
+            self_attn = ['[start]']  # white moves from white perspective
+            cross_attn = ['[black]']
+        else:
+            self_attn = ['[start]']  # black moves from black perspective
+            cross_attn = []          # white moves from black perspective
 
-        # Create Label Sequence
-        label_sequence = moves + line_moves
-        if board.is_checkmate():
-            if white_turn is True:  # White just mated black
-                label_sequence += ['[white]']
-            else:                   # Black just mated white
-                label_sequence += ['[black]']
-        label_sequence = ' '.join(label_sequence)
 
-        # Create Mask
-        mask = [0 for _ in range(len(moves))]
-        mask += [1 for _ in range(len(line_moves))]
-        if board.is_checkmate():
-            mask += [1]  # Predict the color that just won
-        while len(mask) < config.seq_length:
-            mask.append(0)
-        if len(mask) > config.seq_length:
-            mask = mask[:config.seq_length]
+        # iterate over moves
+        self_attn_weights = [0]  # initial 0 to account for the [start] token
+        for idx, move in enumerate(moves):
+            if idx % 2 == 0:
+                if white_turn is True:
+                    self_attn.append(move)
+                    self_attn_weights.append(0)
+                else:
+                    cross_attn.append(move)
+            else:
+                if white_turn is True:
+                    cross_attn.append(move)
+                else:
+                    self_attn.append(move)
+                    self_attn_weights.append(0)
 
-        # Get game piece encoding
-        all_moves = ' '.join(moves + line_moves)
-        piece_encoding = get_padded_piece_encoding_from_str(all_moves)
 
-        return input_sequence, label_sequence, piece_encoding, mask
+        # iterate over the line moves
+        # - the first line move will always be the model's move
+        for idx, move in enumerate(line_moves):
+            if idx % 2 == 0:
+                self_attn.append(move)
+                self_attn_weights.append(1)
+            else:
+                cross_attn.append(move)
+
+        
+        self_attn_inputs = self_attn[:-1]
+        self_attn_labels = self_attn[1:]
+
+        self_attn_weights = self_attn_weights[1:]  # remove the first 0
+        while len(self_attn_weights) < config.seq_length:
+            self_attn_weights.append(0)
+
+        input_sequence = ' '.join(self_attn_inputs)
+        label_sequence = ' '.join(self_attn_labels)
+        cross_attn_sequence = ' '.join(cross_attn)
+
+        return input_sequence, label_sequence, cross_attn_sequence, self_attn_weights, white_turn
 
     # ---------------------------------
     # Validate model
@@ -326,14 +348,8 @@ class AbstractEval:
             dataset = self.eval_cache[theme]
 
         p_batches = tqdm(dataset, desc='Evaluating '+theme+'...')
-        for input_sequences, label_sequences, piece_encodings, masks in p_batches:
-            # if model.m_type == 'v1':
-            #     predictions, val_predictions = model(input_sequences, training=False)
-            # elif model.m_type == 'v2':
-            #     predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
-            # else:
-            #     raise ValueError('Invalid model type')
-            predictions, val_predictions = self.call_model(model, input_sequences, piece_encodings)
+        for input_sequences, label_sequences, cross_sequences, masks, is_white in p_batches:
+            predictions, val_predictions = self.call_model(model, input_sequences, cross_sequences, is_white)
             accuracy_tracker.update_state(label_sequences, predictions, sample_weight=masks)
             if len(self.eval_history[theme]) > 0:
                 postfix_val = accuracy_tracker.result().numpy() - self.eval_history[theme][-1]
@@ -348,13 +364,8 @@ class AbstractEval:
 
 
     @tf.function
-    def call_model(self, model, input_sequences, piece_encodings):
-        if model.m_type == 'v1':
-            predictions, val_predictions = model(input_sequences, training=False)
-        elif model.m_type == 'v2':
-            predictions, val_predictions = model([input_sequences, piece_encodings], training=False)
-        else:
-            raise ValueError('Invalid model type')
+    def call_model(self, model, input_sequences, cross_sequences, is_white):
+        predictions, val_predictions = model([input_sequences, cross_sequences, is_white], training=False)
         return predictions, val_predictions
 
 
@@ -410,25 +421,24 @@ class AbstractEval:
 
 
 
-from model import get_pretrain_model as get_model
+# from model import get_pretrain_model as get_model
 # from model import get_pretrain_model_v2 as get_model
+from model import get_pretrain_model_a3 as get_model
 
 if __name__ == '__main__':
     evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
 
     # checkpoint_path = config.model_path
 
-    model_name = 'chess-gpt-v6-puzzle-v2'
+    model_name = 'chess-gpt-a3.weights.h5'
     checkpoint_path = os.path.join(config.weights_dir, model_name)
     model = get_model(checkpoint_path=checkpoint_path)
 
     ae = AbstractEval()
-
-
     results = ae.run_eval(model, themes=evals)
-    # f_path = os.path.join(config.results_dir, 'evals', 'chess-gpt-v6.json')
-    # with open(f_path, 'w') as f:
-    #     json.dump(results, f, indent=4)
+    f_path = os.path.join(config.results_dir, 'evals', 'chess-gpt-a3.json')
+    with open(f_path, 'w') as f:
+        json.dump(results, f, indent=4)
 
 
     # compare_files = ['chess-gpt-v4-1', 'chess-gpt-v4-2', 'chess-gpt-v3']

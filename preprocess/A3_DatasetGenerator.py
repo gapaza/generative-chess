@@ -28,9 +28,9 @@ multiprocessing.set_start_method('fork', force=True)
 # ------------------------------
 # Datasets
 # ------------------------------
-small_ds = True
+small_ds = False
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'mil-a3-small')
+curr_dataset = os.path.join(config.datasets_dir, 'mil-a3-large')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 

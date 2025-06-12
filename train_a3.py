@@ -3,6 +3,7 @@ import platform
 import tensorflow as tf
 # import tensorflow_addons as tfa
 import os
+import keras
 from model.callbacks.EvalsCallback import EvalsCallback
 from preprocess.A3_DatasetGenerator import A3_DatasetGenerator
 
@@ -19,7 +20,7 @@ from preprocess.A3_DatasetGenerator import A3_DatasetGenerator
 from model import get_pretrain_model_a3 as get_model
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'mil-a3-small')
+curr_dataset = os.path.join(config.datasets_dir, 'mil-a3-large')
 # Train dataset cardinality: 16110
 # Val dataset cardinality: 1124
 
@@ -28,7 +29,7 @@ curr_dataset = os.path.join(config.datasets_dir, 'mil-a3-small')
 save_model = os.path.join(config.weights_dir, 'chess-gpt-a3.weights.h5')
 
 load_model = None
-# load_model = curr_model
+# load_model = os.path.join(config.weights_dir, 'chess-gpt-a3.weights.h5')
 
 
 def train():
@@ -62,7 +63,7 @@ def train():
             train_dataset,
             epochs=config.epochs,
             validation_data=val_dataset,
-            steps_per_epoch=1000,
+            steps_per_epoch=5000,
             validation_steps=30,
             callbacks=checkpoints
         )
@@ -129,7 +130,9 @@ def get_optimizer():
 
     # optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learning_rate)
     # optimizer = tfa.optimizers.LAMB(learning_rate=learning_rate)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    # optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+
+    optimizer = keras.optimizers.AdamW(learning_rate=learning_rate)  # was 0.00005
 
     if config.mixed_precision is True:
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
