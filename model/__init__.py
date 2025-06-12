@@ -140,7 +140,7 @@ def get_pretrain_model_a3(checkpoint_path=None):
     is_white = tf.convert_to_tensor([True])
     model([model_input, cross_input, is_white])
     if checkpoint_path:
-        model.load_weights(checkpoint_path).expect_partial()
+        model.load_weights(checkpoint_path)
     model.summary()
     return model
 

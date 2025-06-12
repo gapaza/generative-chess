@@ -1,7 +1,7 @@
 import config
 import platform
 import tensorflow as tf
-import tensorflow_addons as tfa
+# import tensorflow_addons as tfa
 import os
 from model.callbacks.EvalsCallback import EvalsCallback
 from preprocess.A3_DatasetGenerator import A3_DatasetGenerator
@@ -25,7 +25,7 @@ curr_dataset = os.path.join(config.datasets_dir, 'mil-a3-small')
 
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-a5')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-a3.weights.h5')
 
 load_model = None
 # load_model = curr_model
@@ -45,7 +45,7 @@ def train():
     train_dataset, val_dataset = get_dataset()
 
     # 5. Get Checkpoints
-    # checkpoints = get_checkpoints(save_model)
+    checkpoints = get_checkpoints(save_model)
 
     # 6. Train Model
     if config.distributed is True:
@@ -62,7 +62,9 @@ def train():
             train_dataset,
             epochs=config.epochs,
             validation_data=val_dataset,
-            # callbacks=checkpoints
+            steps_per_epoch=1000,
+            validation_steps=30,
+            callbacks=checkpoints
         )
 
 

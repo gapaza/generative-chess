@@ -1,5 +1,6 @@
 from model.api import ChessGPT_API
 from model.api_a2 import ChessGPTa2_API
+from model.api_a3 import ChessGPTa3_API
 import config
 import os
 
@@ -17,8 +18,9 @@ def run_old():
 
 
 if __name__ == '__main__':
-    model_path = os.path.join(config.weights_dir, 'chess-gpt-a5')
-    api = ChessGPTa2_API(model_path=model_path, user_plays_white=False)
+    model_path = os.path.join(config.weights_dir, 'chess-gpt-a3.weights.h5')
+    # api = ChessGPTa2_API(model_path=model_path, user_plays_white=False)
+    api = ChessGPTa3_API(model_path=model_path, user_plays_white=True)
     api.play_interactive_game()
 
 
