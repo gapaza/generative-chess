@@ -436,7 +436,7 @@ if __name__ == '__main__':
 
     ae = AbstractEval()
     results = ae.run_eval(model, themes=evals)
-    f_path = os.path.join(config.results_dir, 'evals', 'chess-gpt-a3.json')
+    f_path = os.path.join(config.results_dir, 'evals', 'chess-gpt-a3-comb-v2.json')
     with open(f_path, 'w') as f:
         json.dump(results, f, indent=4)
 
