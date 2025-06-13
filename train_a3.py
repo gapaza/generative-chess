@@ -20,16 +20,16 @@ from preprocess.A3_DatasetGenerator import A3_DatasetGenerator
 from model import get_pretrain_model_a3 as get_model
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'mil-a3-large')
+curr_dataset = os.path.join(config.datasets_dir, 'comb-a3-large')
 # Train dataset cardinality: 16110
 # Val dataset cardinality: 1124
 
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-a3.weights.h5')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-a3-comb.weights.h5')
 
-load_model = None
-# load_model = os.path.join(config.weights_dir, 'chess-gpt-a3.weights.h5')
+# load_model = None
+load_model = os.path.join(config.weights_dir, 'chess-gpt-a3-comb.weights.h5')
 
 
 def train():
@@ -99,6 +99,10 @@ def get_dataset():
         val_dataset = config.mirrored_strategy.experimental_distribute_dataset(val_dataset)
         print('-- Distributed Training Enabled --')
 
+    # Shuffle train dataset
+    train_dataset = train_dataset.shuffle(buffer_size=10000, reshuffle_each_iteration=True)
+    train_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+
     return train_dataset, val_dataset
 
 
@@ -107,15 +111,15 @@ def get_optimizer():
     jit_compile = True
 
 
-    # learning_rate = 0.0005  # --> 0.00005
-    # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-    #     0.0,
-    #     100000,
-    #     alpha=0.1,
-    #     warmup_target=learning_rate,
-    #     warmup_steps=1000
-    # )
-    learning_rate = 0.0005
+    learning_rate = 0.00005  # --> 0.00005
+    learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+        0.0,
+        100000,
+        alpha=0.1,
+        warmup_target=learning_rate,
+        warmup_steps=1000
+    )
+    # learning_rate = 0.0004
 
     # learning_rate = 0.0005  # --> 0.0005
     # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
