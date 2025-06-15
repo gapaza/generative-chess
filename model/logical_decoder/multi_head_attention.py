@@ -13,8 +13,8 @@
 # limitations under the License.
 
 from keras_nlp.src.api_export import keras_nlp_export
-from keras_nlp.src.backend import keras
-from keras_nlp.src.backend import ops
+import keras
+from keras import ops
 
 
 @keras_nlp_export("keras_nlp.layers.CachedMultiHeadAttention")

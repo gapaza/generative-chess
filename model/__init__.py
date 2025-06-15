@@ -145,3 +145,18 @@ def get_pretrain_model_a3(checkpoint_path=None):
     return model
 
 
+
+
+
+from model.ChessGPTL3 import ChessGPTa3 as ChessGPTL3
+
+def get_pretrain_model_l3(checkpoint_path=None):
+    model = ChessGPTL3()
+    model_input = tf.ones((1, config.seq_length))
+    cross_input = tf.ones((1, config.seq_length))
+    is_white = tf.convert_to_tensor([True])
+    model([model_input, cross_input, is_white])
+    if checkpoint_path:
+        model.load_weights(checkpoint_path)
+    model.summary()
+    return model

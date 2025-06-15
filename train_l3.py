@@ -17,7 +17,7 @@ from preprocess.A3_DatasetGenerator import A3_DatasetGenerator
 #                                          __/ |
 #                                         |___/
 #
-from model import get_pretrain_model_a3 as get_model
+from model import get_pretrain_model_l3 as get_model
 
 # curr_dataset = config.pt_dataset
 curr_dataset = os.path.join(config.datasets_dir, 'comb-a3-large')
@@ -26,11 +26,11 @@ curr_dataset = os.path.join(config.datasets_dir, 'comb-a3-large')
 
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v2.weights.h5')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-L3.weights.h5')
 
 
 load_model = None
-# load_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v2.weights.h5')
+# load_model = os.path.join(config.weights_dir, 'chess-gpt-a3-comb.weights.h5')
 
 
 def train():
@@ -113,13 +113,13 @@ def get_optimizer():
 
 
     learning_rate = 0.0001  # --> 0.00005
-    # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-    #     0.0,
-    #     100000,
-    #     alpha=0.1,
-    #     warmup_target=learning_rate,
-    #     warmup_steps=1000
-    # )
+    learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+        0.0,
+        100000,
+        alpha=0.1,
+        warmup_target=learning_rate,
+        warmup_steps=1000
+    )
     # learning_rate = 0.0004
 
     # learning_rate = 0.0005  # --> 0.0005
@@ -137,10 +137,7 @@ def get_optimizer():
     # optimizer = tfa.optimizers.LAMB(learning_rate=learning_rate)
     # optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
-    optimizer = keras.optimizers.Adam(learning_rate=learning_rate)  # was 0.00005
-
-    # from model.radam import RectifiedAdam
-    # optimizer = RectifiedAdam(learning_rate=learning_rate)
+    optimizer = keras.optimizers.AdamW(learning_rate=learning_rate)  # was 0.00005
 
     if config.mixed_precision is True:
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)

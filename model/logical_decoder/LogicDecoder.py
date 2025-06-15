@@ -14,6 +14,7 @@
 
 import keras
 from keras import ops
+import tensorflow as tf
 
 from keras_nlp.src.api_export import keras_nlp_export
 
@@ -222,43 +223,43 @@ class LogicDecoder(keras.layers.Layer):
             )
 
         # Feedforward layers.
-        self._feedforward_intermediate_dense = keras.layers.Dense(
-            self.intermediate_dim,
-            activation=self.activation,
-            kernel_initializer=clone_initializer(self.kernel_initializer),
-            bias_initializer=clone_initializer(self.bias_initializer),
-            dtype=self.dtype_policy,
-            name="feedforward_intermediate_dense",
-        )
-        self._feedforward_intermediate_dense.build(decoder_sequence_shape)
-        self._feedforward_output_dense = keras.layers.Dense(
-            hidden_dim,
-            kernel_initializer=clone_initializer(self.kernel_initializer),
-            bias_initializer=clone_initializer(self.bias_initializer),
-            dtype=self.dtype_policy,
-            name="feedforward_output_dense",
-        )
-        intermediate_shape = list(decoder_sequence_shape)
-        intermediate_shape[-1] = self.intermediate_dim
-        self._feedforward_output_dense.build(tuple(intermediate_shape))
-        self._feedforward_layer_norm = keras.layers.LayerNormalization(
-            epsilon=self.layer_norm_epsilon,
-            dtype=self.dtype_policy,
-            name="feedforward_layer_norm",
-        )
-        self._feedforward_layer_norm.build(decoder_sequence_shape)
-        self._feedforward_dropout = keras.layers.Dropout(
-            rate=self.dropout,
-            dtype=self.dtype_policy,
-            name="feedforward_dropout",
-        )
+        # self._feedforward_intermediate_dense = keras.layers.Dense(
+        #     self.intermediate_dim,
+        #     activation=self.activation,
+        #     kernel_initializer=clone_initializer(self.kernel_initializer),
+        #     bias_initializer=clone_initializer(self.bias_initializer),
+        #     dtype=self.dtype_policy,
+        #     name="feedforward_intermediate_dense",
+        # )
+        # self._feedforward_intermediate_dense.build(decoder_sequence_shape)
+        # self._feedforward_output_dense = keras.layers.Dense(
+        #     hidden_dim,
+        #     kernel_initializer=clone_initializer(self.kernel_initializer),
+        #     bias_initializer=clone_initializer(self.bias_initializer),
+        #     dtype=self.dtype_policy,
+        #     name="feedforward_output_dense",
+        # )
+        # intermediate_shape = list(decoder_sequence_shape)
+        # intermediate_shape[-1] = self.intermediate_dim
+        # self._feedforward_output_dense.build(tuple(intermediate_shape))
+        # self._feedforward_layer_norm = keras.layers.LayerNormalization(
+        #     epsilon=self.layer_norm_epsilon,
+        #     dtype=self.dtype_policy,
+        #     name="feedforward_layer_norm",
+        # )
+        # self._feedforward_layer_norm.build(decoder_sequence_shape)
+        # self._feedforward_dropout = keras.layers.Dropout(
+        #     rate=self.dropout,
+        #     dtype=self.dtype_policy,
+        #     name="feedforward_dropout",
+        # )
 
 
         # Mixture of Operators Layer (self-attention)
-        self._moolayer_selfattn = MoOLayer(d=hidden_dim, K=6)
+        self._moolayer_selfattn = MoOLayer(d=hidden_dim)
 
         # Mixture of Operators Layer (cross-attention)
-        self._moolayer_crossattn = MoOLayer(d=hidden_dim, K=6)
+        self._moolayer_crossattn = MoOLayer(d=hidden_dim)
 
 
 
@@ -515,7 +516,12 @@ class LogicDecoder(keras.layers.Layer):
         # else:
         #     return x
 
-        return x
+        all_gates = [
+            gates_self,   # Should be (batch_size, seq_length, K)
+            gates_cross,  # Should be (batch_size, seq_length, K)
+        ]
+
+        return x, all_gates
 
     def _compute_cross_attention_mask(
             self,
