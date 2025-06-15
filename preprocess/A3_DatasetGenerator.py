@@ -28,9 +28,9 @@ multiprocessing.set_start_method('fork', force=True)
 # ------------------------------
 # Datasets
 # ------------------------------
-small_ds = False
+small_ds = True
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'comb-a3-large')
+curr_dataset = os.path.join(config.datasets_dir, 'all-a3-small')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -44,7 +44,7 @@ use_lc0 = False
 # ------------------------------
 # Puzzles
 # ------------------------------
-use_puzzles = False
+use_puzzles = True
 
 
 
@@ -89,6 +89,7 @@ class A3_DatasetGenerator:
         if small:
             move_files = move_files[:6]
             # lc0_files = lc0_files[:6]
+        print('Using files:', move_files)
 
         all_files = move_files
         # if use_lc0:
@@ -101,16 +102,20 @@ class A3_DatasetGenerator:
         # ------------------------------
         # Preprocess Train
         # ------------------------------
-        train_dp = []
+        all_train_dp = []
         with multiprocessing.Pool(self.num_procs) as pool:
             train_dp = pool.map(A3_DatasetGenerator.preproc_datapoints, train_files)
-        all_train_dp = []
         for dp in train_dp:
             all_train_dp.extend(dp)
-        # if use_puzzles is True:
-        #     print('Processing Puzzles')
-        #     puzzle_dp = process_puzzles(self.puzzles_path)
-        #     all_train_dp.extend(puzzle_dp)
+
+        if use_puzzles is True:
+            print('Processing Puzzles')
+            puzzle_dp = process_puzzles(self.puzzles_path)
+            print('Processed', len(puzzle_dp), 'puzzles')
+            random.shuffle(puzzle_dp)
+            puzzle_dp_val = puzzle_dp[:int(len(puzzle_dp) * 0.05)]
+            puzzle_dp_train = puzzle_dp[int(len(puzzle_dp) * 0.05):]
+            all_train_dp.extend(puzzle_dp_train)
         print('Shuffling train datapoints')
         random.shuffle(all_train_dp)
         print('Finished processing train files')
@@ -118,12 +123,16 @@ class A3_DatasetGenerator:
         # ------------------------------
         # Preprocess Val
         # ------------------------------
-        val_dp = []
-        with multiprocessing.Pool(self.num_procs) as pool:
-            val_dp = pool.map(A3_DatasetGenerator.preproc_datapoints, val_files)
         all_val_dp = []
-        for dp in val_dp:
-            all_val_dp.extend(dp)
+        if use_puzzles is False:
+            with multiprocessing.Pool(self.num_procs) as pool:
+                val_dp = pool.map(A3_DatasetGenerator.preproc_datapoints, val_files)
+            all_val_dp = []
+            for dp in val_dp:
+                all_val_dp.extend(dp)
+        else:
+            print('Using puzzles for validation')
+            all_val_dp = puzzle_dp_val
         print('Finished processing val files')
 
         # ------------------------------
@@ -285,20 +294,32 @@ class A3_DatasetGenerator:
 
                 self_attn_inputs_wp = self_attn_wp[:-1]  # All moves except the last one
                 self_attn_labels_wp = self_attn_wp[1:]   # All moves except the first one
+                sample_weights_wp = [1] * len(self_attn_labels_wp)  # All moves have a sample weight of 1
+                while len(sample_weights_wp) < config.seq_length:
+                    sample_weights_wp.append(0)
+                if len(self_attn_inputs_wp) > config.seq_length:
+                    sample_weights_wp = sample_weights_wp[:config.seq_length]
                 white_datapoint = [
                     ' '.join(self_attn_inputs_wp),
                     ' '.join(self_attn_labels_wp),
                     ' '.join(cross_attn_wp),
                     True,  # Is white
+                    sample_weights_wp,  # Sample weights for white moves
                 ]
 
                 self_attn_inputs_bp = self_attn_bp[:-1]  # All moves except the last one
                 self_attn_labels_bp = self_attn_bp[1:]   # All moves except the first one
+                sample_weights_bp = [1] * len(self_attn_labels_bp)  # All moves have a sample weight of 1
+                while len(sample_weights_bp) < config.seq_length:
+                    sample_weights_bp.append(0)
+                if len(self_attn_inputs_bp) > config.seq_length:
+                    sample_weights_bp = sample_weights_bp[:config.seq_length]
                 black_datapoint = [
                     ' '.join(self_attn_inputs_bp),
                     ' '.join(self_attn_labels_bp),
                     ' '.join(cross_attn_bp),
                     False,  # Is black
+                    sample_weights_bp,  # Sample weights for black moves
                 ]
 
                 all_datapoints.append(white_datapoint)
@@ -318,23 +339,27 @@ class A3_DatasetGenerator:
         p2 = [x[1] for x in datapoints]
         p3 = [x[2] for x in datapoints]
         p4 = [x[3] for x in datapoints]
+        p5 = [x[4] for x in datapoints]
 
         p1 = tf.convert_to_tensor(p1, dtype=tf.string)
         p2 = tf.convert_to_tensor(p2, dtype=tf.string)
         p3 = tf.convert_to_tensor(p3, dtype=tf.string)
         p4 = tf.convert_to_tensor(p4, dtype=tf.bool)
+        p5 = tf.convert_to_tensor(p5, dtype=tf.int16)
 
         # print('Unzipped dataset')
         # print('First p1:', p1[0])
         # print('First p2:', p2[0])
         # print('First p3:', p3[0])
         # print('First p4:', p4[0])
+        # print('First p5:', p5[0], len(p5[0]))
 
         print('Creating dataset')
-        dataset = tf.data.Dataset.from_tensor_slices((p1, p2, p3, p4))
+        dataset = tf.data.Dataset.from_tensor_slices((p1, p2, p3, p4, p5))
         print('Created dataset')
         dataset = dataset.batch(config.global_batch_size)
-        dataset = dataset.map(color_masking.preprocess_batch_a3, num_parallel_calls=tf.data.AUTOTUNE)
+        # dataset = dataset.map(color_masking.preprocess_batch_a3, num_parallel_calls=tf.data.AUTOTUNE)
+        dataset = dataset.map(color_masking.preprocess_batch, num_parallel_calls=tf.data.AUTOTUNE)
         return dataset
 
     def parse_reward_dataset(self, datapoints):

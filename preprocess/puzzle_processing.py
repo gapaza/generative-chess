@@ -12,18 +12,27 @@ import numpy as np
 from matplotlib import pyplot as plt
 import pandas as pd
 import multiprocessing
-# multiprocessing.set_start_method('fork', force=True)
+multiprocessing.set_start_method('fork', force=True)
 
 
 
 
 
-def process_puzzles(puzzles_path, num_procs=12):
+# def process_puzzles(puzzles_path, num_procs=12):
+#     puzzles = load_puzzles(puzzles_path)
+#     # puzzles = puzzles[:1000]
+#     with multiprocessing.Pool(num_procs) as pool:
+#         train_dp = pool.map(process_puzzle_a3, puzzles)
+#     return train_dp
+
+def process_puzzles(puzzles_path, num_procs=18):
     puzzles = load_puzzles(puzzles_path)
     # puzzles = puzzles[:1000]
+    results = []
     with multiprocessing.Pool(num_procs) as pool:
-        train_dp = pool.map(process_puzzle, puzzles)
-    return train_dp
+        for result in tqdm(pool.imap_unordered(process_puzzle_a3, puzzles), total=len(puzzles), desc="Processing puzzles"):
+            results.append(result)
+    return results
 
 
 def load_puzzles(puzzles_path):
@@ -96,4 +105,87 @@ def process_puzzle(puzzle):
         sample_weights
     ]
     return datapoint
+
+
+
+
+def process_puzzle_a3(puzzle):
+    board = chess.Board()
+
+    # Push all previous moves to the board
+    moves = puzzle['moves']
+    moves = moves.split(' ')
+    for move in moves:
+        board.push_uci(move)
+
+    # Identify the color solving the puzzle
+    white_turn = (board.turn == chess.WHITE)  # Which color is solving the puzzle?
+
+    # Push puzzle line moves to the board
+    line = puzzle['line']
+    line_moves = line.split(' ')
+    for idx, move in enumerate(line_moves):
+            board.push_uci(move)
+
+
+    # Initialize the model inputs
+    if white_turn is True:
+        self_attn = ['[start]']  # white moves from white perspective
+        cross_attn = ['[black]'] # black moves from white perspective
+    else:
+        self_attn = ['[start]']  # black moves from black perspective
+        cross_attn = []          # white moves from black perspective
+
+    # Iterate over non-line moves
+    self_attn_weights = [0]  # initial 0 to account for the [start] token
+    for idx, move in enumerate(moves):
+        if idx % 2 == 0:
+            if white_turn is True:
+                self_attn.append(move)
+                self_attn_weights.append(0)
+            else:
+                cross_attn.append(move)
+        else:
+            if white_turn is True:
+                cross_attn.append(move)
+            else:
+                self_attn.append(move)
+                self_attn_weights.append(0)
+
+    # iterate over the line moves
+    # - the first line move will always be the model's move
+    for idx, move in enumerate(line_moves):
+        if idx % 2 == 0:
+            self_attn.append(move)
+            self_attn_weights.append(1)
+        else:
+            cross_attn.append(move)
+
+    self_attn_inputs = self_attn[:-1]
+    self_attn_labels = self_attn[1:]
+
+    self_attn_weights = self_attn_weights[1:]  # remove the first 0
+    while len(self_attn_weights) < config.seq_length:
+        self_attn_weights.append(0)
+    if len(self_attn_weights) > config.seq_length:
+        self_attn_weights = self_attn_weights[:config.seq_length]
+
+    input_sequence = ' '.join(self_attn_inputs)
+    label_sequence = ' '.join(self_attn_labels)
+    cross_attn_sequence = ' '.join(cross_attn)
+
+    datapoint = [
+        input_sequence,
+        label_sequence,
+        cross_attn_sequence,
+        white_turn,
+        self_attn_weights
+    ]
+
+    return datapoint
+
+
+
+
+
 

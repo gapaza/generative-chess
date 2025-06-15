@@ -182,15 +182,15 @@ class ChessGPTa3(tf.keras.Model):
     pt_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE, from_logits=True, ignore_class=0)
     pt_loss_tracker = tf.keras.metrics.Mean(name="loss")
     pt_perplexity_tracker = keras_nlp.metrics.Perplexity(name="perplexity", from_logits=True, mask_token_id=0)
-
+    pt_accuracy_tracker = tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")
 
     def train_step(self, inputs):
-        model_inputs, model_labels, cross_inputs, is_white = inputs
+        model_inputs, model_labels, cross_inputs, is_white, sample_weights = inputs
         m_inputs = [model_inputs, cross_inputs, is_white]
         with tf.GradientTape() as tape:
             # Forward Pass
             predictions, val_predcitions = self(m_inputs, training=True)
-            buloss = self.pt_loss_fn(model_labels, predictions)
+            buloss = self.pt_loss_fn(model_labels, predictions, sample_weight=sample_weights)
 
             # DISTRIBUTED TRAINING
             if config.distributed is True:
@@ -211,15 +211,16 @@ class ChessGPTa3(tf.keras.Model):
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
         self.pt_loss_tracker.update_state(buloss)
-        self.pt_perplexity_tracker.update_state(model_labels, predictions)
+        self.pt_perplexity_tracker.update_state(model_labels, predictions, sample_weight=sample_weights)
+        self.pt_accuracy_tracker.update_state(model_labels, predictions, sample_weight=sample_weights)
 
-        return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result()}
+        return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result(), "accuracy": self.pt_accuracy_tracker.result()}
 
     def test_step(self, inputs):
-        model_inputs, model_labels, cross_inputs, is_white = inputs
+        model_inputs, model_labels, cross_inputs, is_white, sample_weights = inputs
         m_inputs = [model_inputs, cross_inputs, is_white]
         predictions, val_predcitions = self(m_inputs, training=False)
-        bloss = self.pt_loss_fn(model_labels, predictions)
+        bloss = self.pt_loss_fn(model_labels, predictions, sample_weight=sample_weights)
 
         # DISTRIBUTED TRAINING
         if config.distributed is True:
@@ -228,13 +229,14 @@ class ChessGPTa3(tf.keras.Model):
             loss = bloss
 
         self.pt_loss_tracker.update_state(loss)
-        self.pt_perplexity_tracker.update_state(model_labels, predictions)
+        self.pt_perplexity_tracker.update_state(model_labels, predictions, sample_weight=sample_weights)
+        self.pt_accuracy_tracker.update_state(model_labels, predictions, sample_weight=sample_weights)
 
-        return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result()}
+        return {"loss": self.pt_loss_tracker.result(), "perplexity": self.pt_perplexity_tracker.result(), "accuracy": self.pt_accuracy_tracker.result()}
 
     @property
     def metrics(self):
-        return [self.pt_loss_tracker, self.pt_perplexity_tracker]
+        return [self.pt_loss_tracker, self.pt_perplexity_tracker, self.pt_accuracy_tracker]
 
 
 

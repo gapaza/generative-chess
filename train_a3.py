@@ -20,17 +20,17 @@ from preprocess.A3_DatasetGenerator import A3_DatasetGenerator
 from model import get_pretrain_model_a3 as get_model
 
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'comb-a3-large')
+curr_dataset = os.path.join(config.datasets_dir, 'all-a3-small')
 # Train dataset cardinality: 16110
 # Val dataset cardinality: 1124
 
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v2.weights.h5')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v3.weights.h5')
 
 
 load_model = None
-# load_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v2.weights.h5')
+# load_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v3.weights.h5')
 
 
 def train():
@@ -65,7 +65,7 @@ def train():
             epochs=config.epochs,
             validation_data=val_dataset,
             steps_per_epoch=5000,
-            validation_steps=30,
+            validation_steps=50,
             callbacks=checkpoints
         )
 
@@ -112,15 +112,14 @@ def get_optimizer():
     jit_compile = True
 
 
-    learning_rate = 0.0001  # --> 0.00005
-    # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
-    #     0.0,
-    #     100000,
-    #     alpha=0.1,
-    #     warmup_target=learning_rate,
-    #     warmup_steps=1000
-    # )
-    # learning_rate = 0.0004
+    learning_rate = 0.0004  # --> 0.00005
+    learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+        0.0,
+        100000,
+        alpha=0.1,
+        warmup_target=learning_rate,
+        warmup_steps=1000
+    )
 
     # learning_rate = 0.0005  # --> 0.0005
     # learning_rate = tf.keras.optimizers.schedules.CosineDecay(
@@ -139,7 +138,7 @@ def get_optimizer():
 
     optimizer = keras.optimizers.Adam(learning_rate=learning_rate)  # was 0.00005
 
-    # from model.radam import RectifiedAdam
+    # from model.optimizers.radam import RectifiedAdam
     # optimizer = RectifiedAdam(learning_rate=learning_rate)
 
     if config.mixed_precision is True:

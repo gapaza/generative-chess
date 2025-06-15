@@ -111,7 +111,7 @@ pt_dataset = os.path.join(datasets_dir, 'dataset-arch2-lc0')
 epochs = 200
 epoch_steps = 3000  # 16110
 val_steps = 1000    # 1124
-global_batch_size = 32  # * 16  # 64, 128, 256, 512, 1024
+global_batch_size = 128  # * 16  # 64, 128, 256, 512, 1024
 
 
 
