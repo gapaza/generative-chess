@@ -28,7 +28,7 @@ multiprocessing.set_start_method('fork', force=True)
 # ------------------------------
 # Datasets
 # ------------------------------
-small_ds = True
+small_ds = False
 # curr_dataset = config.pt_dataset
 curr_dataset = os.path.join(config.datasets_dir, 'all-a3-small')
 if not os.path.exists(curr_dataset):
@@ -37,7 +37,7 @@ if not os.path.exists(curr_dataset):
 # ------------------------------
 # UCI Games
 # ------------------------------
-uci_dir = os.path.join(config.games_dir, 'combined')
+uci_dir = os.path.join(config.games_dir, 'millionsbase')
 lc0_dir = os.path.join(config.games_dir, 'lc0')
 use_lc0 = False
 

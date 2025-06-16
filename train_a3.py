@@ -26,7 +26,7 @@ curr_dataset = os.path.join(config.datasets_dir, 'all-a3-small')
 
 
 # save_model = config.model_path
-save_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v3.weights.h5')
+save_model = os.path.join(config.weights_dir, 'chess-gpt-a3-v4.weights.h5')
 
 
 load_model = None
@@ -112,11 +112,11 @@ def get_optimizer():
     jit_compile = True
 
 
-    learning_rate = 0.0004  # --> 0.00005
+    learning_rate = 0.00005  # --> 0.00005
     learning_rate = tf.keras.optimizers.schedules.CosineDecay(
         0.0,
         100000,
-        alpha=0.1,
+        alpha=0.2,
         warmup_target=learning_rate,
         warmup_steps=1000
     )

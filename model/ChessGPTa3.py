@@ -24,7 +24,7 @@ from model.decoder.CustomDecoder import CustomDecoder as TransformerDecoder
 dense_dim = 1024
 heads = 8
 embed_dim = 512
-dropout = 0.0
+dropout = 0.1
 
 
 temperature = 1.0
