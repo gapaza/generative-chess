@@ -18,6 +18,7 @@ from evals.utils import process_puzzle_batch
 from stockfish.utils import get_stockfish
 from stockfish.rewards.reward_2 import calc_reward_slice
 from preprocess.puzzle_processing import process_puzzles
+from preprocess.selfplay_processing import process_self_play
 
 
 
@@ -45,6 +46,12 @@ use_lc0 = True
 # Puzzles
 # ------------------------------
 use_puzzles = True
+
+# ------------------------------
+# Engine Self Play
+# ------------------------------
+use_self_play = False
+self_play_dir = '/Users/gapaza/repos/gabe/generative-chess/results/100k_1'
 
 
 
