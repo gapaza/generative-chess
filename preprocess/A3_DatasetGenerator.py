@@ -30,7 +30,7 @@ multiprocessing.set_start_method('fork', force=True)
 # ------------------------------
 small_ds = False
 # curr_dataset = config.pt_dataset
-curr_dataset = os.path.join(config.datasets_dir, 'all-a3-small')
+curr_dataset = os.path.join(config.datasets_dir, 'all-a3-large-lc0')
 if not os.path.exists(curr_dataset):
     os.makedirs(curr_dataset)
 
@@ -39,7 +39,7 @@ if not os.path.exists(curr_dataset):
 # ------------------------------
 uci_dir = os.path.join(config.games_dir, 'millionsbase')
 lc0_dir = os.path.join(config.games_dir, 'lc0')
-use_lc0 = False
+use_lc0 = True
 
 # ------------------------------
 # Puzzles
@@ -84,16 +84,16 @@ class A3_DatasetGenerator:
             return
 
         move_files = self.load_uci_files()
-        # lc0_files = self.load_lc0_files()
+        lc0_files = self.load_lc0_files()
 
         if small:
             move_files = move_files[:6]
-            # lc0_files = lc0_files[:6]
-        print('Using files:', move_files)
+            lc0_files = lc0_files[:6]
 
         all_files = move_files
-        # if use_lc0:
-        #     all_files.extend(lc0_files)
+        if use_lc0 is True:
+            all_files.extend(lc0_files)
+        print('Using files:', all_files)
         random.shuffle(all_files)
 
         train_files = all_files[:int(len(all_files) * 0.94)]

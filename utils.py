@@ -2,6 +2,7 @@ import config
 import chess
 import chess.pgn
 import os
+import random
 
 
 def save_game_pgn(game_moves, save_dir, file_name='game.pgn'):
@@ -67,10 +68,71 @@ def get_inputs_from_game(game_move_ids, white_turn):
 
 
 
+def get_inputs_from_game_a3(game_move_ids, white_turn):
+    game = [x for x in game_move_ids if config.id2token[x] not in config.non_move_tokens]
+
+
+    if white_turn is True:
+        self_attn = [config.token2id['[start]']]   # white moves from white perspective
+        cross_attn = [config.token2id['[black]']]  # black moves from white perspective
+    else:
+        self_attn = [config.token2id['[start]']]   # black moves from black perspective
+        cross_attn = []  # white moves from black perspective
+
+    for idx, obs in enumerate(game):
+        if idx % 2 == 0:
+            if white_turn is True:
+                self_attn.append(obs)
+            else:
+                cross_attn.append(obs)
+        else:
+            if white_turn is True:
+                cross_attn.append(obs)
+            else:
+                self_attn.append(obs)
+
+    inf_idx = len(self_attn) - 1
+    return self_attn, cross_attn, inf_idx
+
+
+def get_engine_move(game_move_ids, engine, elo=1200):
+    game = [x for x in game_move_ids if config.id2token[x] not in config.non_move_tokens]
+
+    board = chess.Board()
+
+    for idx, obs in enumerate(game):
+        move = chess.Move.from_uci(config.id2token[obs])
+        if move not in board.legal_moves:
+            return None
+        board.push(move)
+
+
+
+    # --- ENGINE MOVE
+    result = engine.play(board, chess.engine.Limit(time=0.002))
+    if result.move is None:
+        # play a random legal move if no best move is found
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return None
+        result.move = random.choice(legal_moves)
+
+        uci = str(result.move.uci())
+        print('Random move selected:', uci)
+    else:
+        uci = str(result.move.uci())
+        # print('Engine move selected:', uci)
+
+    # # --- RANDOM MOVE
+    # legal_moves = list(board.legal_moves)
+    # if not legal_moves:
+    #     return None
+    # uci = str(random.choice(legal_moves).uci())
 
 
 
 
+    return uci
 
 
 

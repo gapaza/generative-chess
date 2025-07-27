@@ -74,7 +74,8 @@ if not os.path.exists(games_dir):
 
 
 # stockfish_path = os.path.join(root_dir, 'stockfish', 'stockfish', 'stockfish_14.1_linux_x64_avx2')
-stockfish_path = '/home/ubuntu/engines/Stockfish-sf_16.1/src/stockfish'
+# stockfish_path = '/home/ubuntu/engines/Stockfish-sf_16.1/src/stockfish'
+stockfish_path = '/home/gapaza/scratch/stockfish/stockfish_14.1_linux_x64_avx2/stockfish_14.1_linux_x64_avx2' # stockfish_14.1_linux_x64_avx2
 
 
 #
@@ -108,7 +109,7 @@ dropout = 0.0
 
 # --> Training
 pt_dataset = os.path.join(datasets_dir, 'dataset-arch2-lc0')
-epochs = 200
+epochs = 10000
 epoch_steps = 3000  # 16110
 val_steps = 1000    # 1124
 global_batch_size = 128  # * 16  # 64, 128, 256, 512, 1024

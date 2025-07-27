@@ -24,7 +24,7 @@ from model.decoder.CustomDecoder import CustomDecoder as TransformerDecoder
 dense_dim = 1024
 heads = 8
 embed_dim = 512
-dropout = 0.1
+dropout = 0.0
 
 
 temperature = 1.0
@@ -63,10 +63,10 @@ class ChessGPTa3(tf.keras.Model):
         self.decoder_2 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
         self.decoder_3 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
         self.decoder_4 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
-        self.decoder_5 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
-        self.decoder_6 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
-        self.decoder_7 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
-        self.decoder_8 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
+        # self.decoder_5 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
+        # self.decoder_6 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
+        # self.decoder_7 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
+        # self.decoder_8 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.norm_first, dropout=dropout)
 
 
         # Move Prediction Head
@@ -80,7 +80,7 @@ class ChessGPTa3(tf.keras.Model):
         self.value_prediction_head = keras.layers.Dense(
             1,
             name="value_prediction_head",
-            activation="tanh",  # was linear
+            activation="linear",
         )
 
     def freeze_base(self):
@@ -90,21 +90,17 @@ class ChessGPTa3(tf.keras.Model):
         # Freeze the decoder layers
         self.decoder_1.trainable = False
         self.decoder_2.trainable = False
-        self.decoder_3.trainable = True
-        self.decoder_4.trainable = True
-        self.decoder_5.trainable = True
-        self.decoder_6.trainable = True
-        self.decoder_7.trainable = True
+        self.decoder_3.trainable = False
+        self.decoder_4.trainable = False
+        self.decoder_5.trainable = False
+        self.decoder_6.trainable = False
+        self.decoder_7.trainable = False
         self.decoder_8.trainable = True
 
         # Freeze the prediction heads
         self.move_prediction_head.trainable = False
         self.value_prediction_head.trainable = True
 
-
-    @tf.function(jit_compile=True, reduce_retracing=True)
-    def call_tf(self, inputs, training=False):
-        return self.call(inputs, training=training)
 
     def call(self, inputs, training=False):
 
@@ -152,34 +148,34 @@ class ChessGPTa3(tf.keras.Model):
             use_causal_mask=True, use_casual_cross_mask=True,
             training=training
         )
-        decoded_move = self.decoder_5(
-            decoded_move,
-            encoder_sequence=opp_move_embeddings,
-            # encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True, use_casual_cross_mask=True,
-            training=training
-        )
-        decoded_move = self.decoder_6(
-            decoded_move,
-            encoder_sequence=opp_move_embeddings,
-            # encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True, use_casual_cross_mask=True,
-            training=training
-        )
-        decoded_move = self.decoder_7(
-            decoded_move,
-            encoder_sequence=opp_move_embeddings,
-            # encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True, use_casual_cross_mask=True,
-            training=training
-        )
-        decoded_move = self.decoder_8(
-            decoded_move,
-            encoder_sequence=opp_move_embeddings,
-            # encoder_attention_mask=causal_cross_mask,
-            use_causal_mask=True, use_casual_cross_mask=True,
-            training=training
-        )
+        # decoded_move = self.decoder_5(
+        #     decoded_move,
+        #     encoder_sequence=opp_move_embeddings,
+        #     # encoder_attention_mask=causal_cross_mask,
+        #     use_causal_mask=True, use_casual_cross_mask=True,
+        #     training=training
+        # )
+        # decoded_move = self.decoder_6(
+        #     decoded_move,
+        #     encoder_sequence=opp_move_embeddings,
+        #     # encoder_attention_mask=causal_cross_mask,
+        #     use_causal_mask=True, use_casual_cross_mask=True,
+        #     training=training
+        # )
+        # decoded_move = self.decoder_7(
+        #     decoded_move,
+        #     encoder_sequence=opp_move_embeddings,
+        #     # encoder_attention_mask=causal_cross_mask,
+        #     use_causal_mask=True, use_casual_cross_mask=True,
+        #     training=training
+        # )
+        # decoded_move = self.decoder_8(
+        #     decoded_move,
+        #     encoder_sequence=opp_move_embeddings,
+        #     # encoder_attention_mask=causal_cross_mask,
+        #     use_causal_mask=True, use_casual_cross_mask=True,
+        #     training=training
+        # )
 
         # Move Prediction Head
         move_predictions = self.move_prediction_head(decoded_move)

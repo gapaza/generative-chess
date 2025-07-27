@@ -144,6 +144,46 @@ def get_pretrain_model_a3(checkpoint_path=None):
     model.summary()
     return model
 
+from model.ChessGPTa3_critic import ChessGPTa3 as ChessGPTa3Critic
+
+
+def get_rl_models_a3(checkpoint_actor_1=None, checkpoint_actor_2=None, checkpoint_critic=None):
+    model_input = tf.ones((1, config.seq_length))
+    cross_input = tf.ones((1, config.seq_length))
+    is_white = tf.convert_to_tensor([True])
+
+    actor_1_model = ChessGPTa3()
+    actor_1_model([model_input, cross_input, is_white])
+
+    actor_2_model = ChessGPTa3()
+    actor_2_model([model_input, cross_input, is_white])
+
+    critic_model = ChessGPTa3()
+    # critic_model = ChessGPTa3Critic()
+    critic_model([model_input, cross_input, is_white])
+
+    if checkpoint_actor_1:
+        actor_1_model.load_weights(checkpoint_actor_1)
+
+    if checkpoint_actor_2:
+        actor_2_model.load_weights(checkpoint_actor_2)
+
+    if checkpoint_critic:
+        critic_model.load_weights(checkpoint_critic)
+        critic_model.freeze_base()
+
+
+    actor_1_model.summary()
+    actor_2_model.summary()
+    critic_model.summary()
+    return actor_1_model, actor_2_model, critic_model
+
+
+
+
+
+
+
 
 
 

@@ -1,6 +1,7 @@
 import numpy as np
 import time
 import tensorflow as tf
+import keras
 from copy import deepcopy
 import matplotlib.gridspec as gridspec
 import random
@@ -12,16 +13,19 @@ import matplotlib.pyplot as plt
 import os
 from tasks.AbstractTask import AbstractTask
 import scipy.signal
-from model import get_rl_models_a2 as get_model
+from model import get_rl_models_a3 as get_model
 from collections import OrderedDict
-import tensorflow_addons as tfa
+# import tensorflow_addons as tfa
 import chess
 import chess.engine
-from stockfish.rewards.reward_2 import calc_reward
-from evals.Arch2Evals import Arch2Evals as Evals
+from stockfish.rewards.reward_3 import calc_reward
+from evals.Arch3Evals import Arch3Evals as Evals
 from evals.plotting.training_comparison import plot_training_comparison
 from stockfish.utils import combine_alternate
-from utils import save_game_pgn, get_inputs_from_game
+from utils import save_game_pgn
+from utils import get_inputs_from_game_a3 as get_inputs_from_game
+from utils import get_engine_move
+
 
 
 def discounted_cumulative_sums(x, discount):
@@ -31,15 +35,15 @@ def discounted_cumulative_sums(x, discount):
 
 
 # Number of self-play games in a mini-batch
-global_mini_batch_size = 16
+global_mini_batch_size = 64
 
-run_evals = True
-use_actor_warmup = True
+run_evals = False
+use_actor_warmup = False
 critic_warmup_epochs = 0
 
 pickup_epoch = 0
 
-run_dir = 4002
+run_dir = 22
 run_dir_itr = 0
 
 top_k = None
@@ -51,7 +55,10 @@ tf.random.set_seed(seed)
 np.random.seed(seed)
 
 
-class SelfPlayTaskA2(AbstractTask):
+
+
+
+class SelfPlayTaskA3(AbstractTask):
 
     def __init__(
             self,
@@ -65,7 +72,7 @@ class SelfPlayTaskA2(AbstractTask):
             run_val=False,
             val_itr=0,
     ):
-        super(SelfPlayTaskA2, self).__init__(run_num, None, problem, epochs, actor_load_path, critic_load_path)
+        super(SelfPlayTaskA3, self).__init__(run_num, None, problem, epochs, actor_load_path, critic_load_path)
         self.debug = debug
         self.run_val = run_val
         self.val_itr = val_itr
@@ -73,21 +80,22 @@ class SelfPlayTaskA2(AbstractTask):
 
         # Evals
         self.eval_themes = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
-        self.eval = Evals(themes=self.eval_themes)
-        self.eval2 = Evals(themes=self.eval_themes)
+        # self.eval = Evals(themes=self.eval_themes)
+        # self.eval2 = Evals(themes=self.eval_themes)
 
         # Algorithm parameters
         self.mini_batch_size = global_mini_batch_size
         self.nfe = 0
         self.epochs = epochs
-        self.max_steps_per_game = config.seq_length - 1  # 30 | 60
+        # self.max_steps_per_game = config.seq_length - 1  # 30 | 60
+        self.max_steps_per_game = 40  # 30 | 60
 
         # PPO alg parameters
         self.gamma = 0.99
         self.lam = 0.95
         self.clip_ratio = 0.2
-        self.target_kl = 0.001  # was 0.0001
-        self.entropy_coef = 0.00  # was 0.02 originally
+        self.target_kl = 0.002  # was 0.00015
+        self.entropy_coef = 0.04  # was 0.02 originally, 0.01 before
         self.counter = 0
         self.game_start_token_id = config.start_token_id
         self.num_actions = config.vocab_size
@@ -95,7 +103,7 @@ class SelfPlayTaskA2(AbstractTask):
         self.actor_updates = 0
 
         # Results
-        self.plot_freq = 10
+        self.plot_freq = 50
 
         # Pretrain save dir
         self.pretrain_save_dir = os.path.join(self.run_dir, 'pretrained')
@@ -111,9 +119,15 @@ class SelfPlayTaskA2(AbstractTask):
         self.critic_save_path = os.path.join(self.critic_save_dir, 'critic_weights')
 
         # Stockfish Engine
+        print('Using Stockfish engine at:', config.stockfish_path)
         self.engine = chess.engine.SimpleEngine.popen_uci(config.stockfish_path)
-        self.engine.configure({'Threads': 32, "Hash": 4096 * 2})
-        self.nodes = 50000
+        self.engine.configure({
+            'Threads': config.AVAILABLE_CPUS, 
+            "Hash": 4096 * 2, 
+            "UCI_LimitStrength": True, 
+            "UCI_Elo": 1350
+        })
+        self.nodes = 1000000
         self.lines = 1
 
         # Additional epoch info
@@ -137,55 +151,65 @@ class SelfPlayTaskA2(AbstractTask):
         }
 
 
-
-
     def build(self):
 
         # Optimizer parameters
-        self.actor_learning_rate = 0.000005  # 0.0001
+        self.actor_learning_rate = 0.00001  # 0.0001
         self.critic_learning_rate = 0.00001  # 0.0001
-        self.train_actor_iterations = 250  # was 250
-        self.train_critic_iterations = 40  # was 40
+        self.train_actor_iterations = 20  # was 250
+        self.train_critic_iterations = 80  # was 40
+
+        # Warmup Learning Rate
+        self.actor_learning_rate_1 = tf.keras.optimizers.schedules.CosineDecay(
+            0.0,
+            100000,
+            alpha=0.1,
+            warmup_target=self.actor_learning_rate,
+            warmup_steps=100
+        )
+        self.actor_learning_rate_2 = tf.keras.optimizers.schedules.CosineDecay(
+            0.0,
+            100000,
+            alpha=0.1,
+            warmup_target=self.actor_learning_rate,
+            warmup_steps=100
+        )
+        self.critic_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+            0.0,
+            100000,
+            alpha=0.1,
+            warmup_target=self.critic_learning_rate,
+            warmup_steps=100
+        )
+
 
         # Optimizers
         if self.actor_optimizer is None:
-            # self.actor_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.actor_learning_rate)
-            # self.actor_optimizer_2 = tf.keras.optimizers.legacy.Adam(learning_rate=self.actor_learning_rate)
-
-            self.actor_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.actor_learning_rate)
-            self.actor_optimizer_2 = tfa.optimizers.RectifiedAdam(learning_rate=self.actor_learning_rate)
+            self.actor_optimizer = keras.optimizers.Adam(learning_rate=self.actor_learning_rate_1)
+            self.actor_optimizer_2 = keras.optimizers.Adam(learning_rate=self.actor_learning_rate_2)
         if self.critic_optimizer is None:
-            # self.critic_optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=self.critic_learning_rate)
-            self.critic_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.critic_learning_rate)
-
-        if config.mixed_precision is True:
-            # optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
-            self.actor_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.actor_optimizer)
-            self.actor_optimizer_2 = tf.keras.mixed_precision.LossScaleOptimizer(self.actor_optimizer_2)
-            self.critic_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.critic_optimizer)
+            self.critic_optimizer = keras.optimizers.Adam(learning_rate=self.critic_learning_rate)
 
 
         self.mse_loss = tf.keras.losses.MeanSquaredError()
-
         self.c_actor, self.c_actor_2, self.c_critic = get_model(self.actor_load_path, self.actor_2_load_path, self.critic_load_path)
-
 
 
     def run(self):
         self.build()
 
-        self.run_evals()
+        # self.run_evals()
         for x in range(self.epochs):
             self.curr_epoch = x
             epoch_info = self.fast_mini_batch()
 
             self.record()
 
-            if self.curr_epoch % 50 == 0 and self.curr_epoch > 0:
-                t_actor_save_path = os.path.join(self.pretrain_save_dir, 'actor_weights_' + str(self.curr_epoch + pickup_epoch))
-                t_actor_save_path_2 = os.path.join(self.pretrain_save_dir, 'actor_weights_2_' + str(self.curr_epoch + pickup_epoch))
-                t_critic_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights_' + str(self.curr_epoch + pickup_epoch))
-                self.c_actor.save_weights(t_actor_save_path)
+            if self.curr_epoch % 200 == 0 and self.curr_epoch > 0:
+                # t_actor_save_path = os.path.join(self.pretrain_save_dir, 'actor_weights_' + str(self.curr_epoch + pickup_epoch) + '.weights.h5')
+                t_actor_save_path_2 = os.path.join(self.pretrain_save_dir, 'actor_weights_2_' + str(self.curr_epoch + pickup_epoch) + '.weights.h5')
+                t_critic_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights_' + str(self.curr_epoch + pickup_epoch) + '.weights.h5')
+                # self.c_actor.save_weights(t_actor_save_path)
                 self.c_actor_2.save_weights(t_actor_save_path_2)
                 self.c_critic.save_weights(t_critic_save_path)
                 # self.c_critic.save_weights(self.critic_save_path)
@@ -194,7 +218,6 @@ class SelfPlayTaskA2(AbstractTask):
         self.c_actor.save_weights(self.actor_pretrain_save_path)
         self.c_actor_2.save_weights(self.actor_pretrain_save_path)
         self.c_critic.save_weights(self.critic_pretrain_save_path)
-
 
 
     def pad_list(self, sequence, pad_token=0, pad_len=None):
@@ -207,23 +230,28 @@ class SelfPlayTaskA2(AbstractTask):
         return sequence
 
 
+
+
+
     def fast_mini_batch(self):
         total_eval_time = 0
+        # print('Starting mini-batch...')
 
-        all_actions = [[] for _ in range(self.mini_batch_size)]
-        all_logprobs = [[] for _ in range(self.mini_batch_size)]
-        games = [[] for x in range(self.mini_batch_size)]
-        epoch_games = []
+
         observation = [[] for x in range(self.mini_batch_size)]
         critic_observation_buffer = [[] for x in range(self.mini_batch_size)]
-        ended_games = [False for x in range(self.mini_batch_size)]
+        ended_games = [False for x in range(self.mini_batch_size)] # Records if a game has ended
+        nat_ended_games = [False for x in range(self.mini_batch_size)] # Records if a game has ended naturally (not by padding)
         boards = [chess.Board() for x in range(self.mini_batch_size)]
         game_evals = [0.2 for x in range(self.mini_batch_size)] # Eval from white perspective
         action_mask = [[] for x in range(self.mini_batch_size)]
 
+        games = [[] for x in range(self.mini_batch_size)] # Each game is a list of token_ids
+        epoch_games = []
+
 
         # --- Color Specific ---
-        # - we can reconstruct the color-specific observations from the full observations
+        # - we can reconstruct the color-specific observations from the full observations with get_inputs_from_game
         white_actions = [[] for x in range(self.mini_batch_size)]
         black_actions = [[] for x in range(self.mini_batch_size)]
         white_action_mask = [[] for x in range(self.mini_batch_size)]
@@ -232,16 +260,20 @@ class SelfPlayTaskA2(AbstractTask):
         black_logprobs = [[] for x in range(self.mini_batch_size)]
 
         # --- KL Divergence ---
-        all_white_logprobs_full = [[] for _ in range(self.mini_batch_size)]
         all_white_probs_full = [[] for _ in range(self.mini_batch_size)]
-
-        all_black_logprobs_full = [[] for _ in range(self.mini_batch_size)]
         all_black_probs_full = [[] for _ in range(self.mini_batch_size)]
+        all_white_logprobs_full = [[] for _ in range(self.mini_batch_size)]
+        all_black_logprobs_full = [[] for _ in range(self.mini_batch_size)]
+
+        
+
+
 
 
         # -------------------------------------
         # Sample Actors
         # -------------------------------------
+        curr_time = time.time()
         player_models = [
             1,  # self.c_actor
             2  # self.c_actor_2
@@ -257,7 +289,11 @@ class SelfPlayTaskA2(AbstractTask):
         self.additional_info['model_2_win_predictions'].append(0)
 
 
+
+
         for t in range(self.max_steps_per_game):
+
+            # 1. Select the actor to use based on the turn
             if t % 2 == 0:  # even number
                 actor = white_model
                 white_turn = True
@@ -265,23 +301,28 @@ class SelfPlayTaskA2(AbstractTask):
                 actor = black_model
                 white_turn = False
 
+
             # 2. Sample actions
             action_log_prob, action, all_action_probs, all_action_log_probs = self.sample_actor(observation, white_turn, actor=actor)  # returns shape: (batch,) and (batch,)
+
+            # if actor == 1:
+            #     action_log_prob, action, all_action_probs, all_action_log_probs = self.sample_actor(observation, white_turn, actor=actor)  # returns shape: (batch,) and (batch,)
+            # else:
+            #     action_log_prob, action, all_action_probs, all_action_log_probs = self.sample_engine(observation, white_turn, actor=actor)
+
+
+
             action_log_prob = action_log_prob.numpy().tolist()
             action = action.numpy().tolist()
             all_action_log_probs = all_action_log_probs.numpy().tolist()
             all_action_probs = all_action_probs.numpy().tolist()
 
-            # first_ele = all_action_probs[0]
-            # print(len(first_ele), config.vocab_size, first_ele)
-            # exit(0)
 
             # 3. Update the game state
             observation_new = deepcopy(observation)
             for idx, act in enumerate(action):
                 if ended_games[idx] is True:
-                    all_actions[idx].append(0)
-                    all_logprobs[idx].append(0)
+                    # this move is not valid, the game has ended
                     m_action = int(0)  # If game has ended, set action to 0 for padding token
                     observation_new[idx].append(m_action)
                     action_mask[idx].append(0)
@@ -294,8 +335,7 @@ class SelfPlayTaskA2(AbstractTask):
                         black_actions[idx].append(0)
                         black_logprobs[idx].append(0)
                 else:
-                    all_actions[idx].append(deepcopy(act))
-                    all_logprobs[idx].append(action_log_prob[idx])
+                    # we don't check if the move is valid or not, this is done next. plus we need to see invalid moves penalized
                     m_action = int(deepcopy(act))
                     games[idx].append(m_action)
                     observation_new[idx].append(m_action)
@@ -315,42 +355,33 @@ class SelfPlayTaskA2(AbstractTask):
                         all_black_probs_full[idx].append(all_action_probs[idx])
                         all_black_logprobs_full[idx].append(all_action_log_probs[idx])
 
-            # 4. Determine if game has ended
-            max_game_len = max([len(x) for x in games])
-            if max_game_len == self.max_steps_per_game:
+            # 4. Check if on last epoch
+            if t == (self.max_steps_per_game - 1):
+                # print('on last epoch', t, self.max_steps_per_game)
                 done = True
-                for idx, game in enumerate(games):
-                    if ended_games[idx] is False:
-                        reward, game_ended, new_eval = self.calc_reward(
-                            game,
-                            game_evals[idx],
-                            boards[idx],
-                            actor
-                        )
-                        if game_ended is False:
-                            game_evals[idx] = new_eval
-                        if game_ended != ended_games[idx]:
-                            epoch_games.append(' '.join([config.id2token[x] for x in game]))
-                        ended_games[idx] = game_ended
             else:
+                # print('not on last epoch', t, self.max_steps_per_game)
                 done = False
-                for idx, game in enumerate(games):
-                    if ended_games[idx] is False:
-                        reward, game_ended, new_eval = self.calc_reward(
-                            game,
-                            game_evals[idx],
-                            boards[idx],
-                            actor
-                        )
-                        if game_ended is False:
-                            game_evals[idx] = new_eval
-                        if game_ended != ended_games[idx]:
-                            epoch_games.append(' '.join([config.id2token[x] for x in game]))
-                        ended_games[idx] = game_ended
+            
+            # 5. Check if the games have ended
+            for idx, game in enumerate(games):
+                if ended_games[idx] is False:
+                    ge = self.has_game_ended(game, actor)
+                    if done is True:
+                        game_ended = True # Force end of game if we are on the last epoch
+                    else:
+                        game_ended = ge
+                    if game_ended is True:
+                        epoch_games.append(' '.join([config.id2token[x] for x in game]))
+                    ended_games[idx] = game_ended
+                    nat_ended_games[idx] = ge
+
+            # 6. Check if all games have ended
             if all(ended_games):
                 done = True
 
-            # 5. Update the observation
+
+            # 7. Update the observation
             if done is True:
                 critic_observation_buffer = deepcopy(observation_new)
                 break
@@ -358,12 +389,22 @@ class SelfPlayTaskA2(AbstractTask):
                 observation = observation_new
 
 
+        # Create action masks for critic
+        # - the critic sees one additional position, as it predicts a value for all the actions AND the final state
+        white_action_mask_critic = deepcopy(white_action_mask)
+        for idx in range(len(white_action_mask_critic)):
+            white_action_mask_critic[idx].append(1)  # Add padding token for critic
+        for trajectory in white_action_mask_critic:
+            trajectory = self.pad_list(trajectory, pad_token=0, pad_len=config.seq_length)
+
+        black_action_mask_critic = deepcopy(black_action_mask)
+        for idx in range(len(black_action_mask_critic)):
+            black_action_mask_critic[idx].append(1)
+        for trajectory in black_action_mask_critic:
+            trajectory = self.pad_list(trajectory, pad_token=0, pad_len=config.seq_length)
+
 
         # Count the number of checkmates + finish trajectories
-        num_checkmates = 0
-        for idx, board in enumerate(boards):
-            if board.is_checkmate() is True:
-                num_checkmates += 1
         for trajectory in observation:
             trajectory = self.pad_list(trajectory, pad_token=0, pad_len=config.seq_length-1)
         for trajectory in action_mask:
@@ -397,51 +438,40 @@ class SelfPlayTaskA2(AbstractTask):
             while len(trajectory) < config.seq_length:
                 trajectory.append([0 for _ in range(config.vocab_size)])
 
+
         # print('Saving game...')
         save_game_pgn(games[0], self.run_dir)
+        # print('Game 1:', ' '.join([config.id2token[x] for x in games[0]]))
+        # exit(0)
 
+        # print('Time sample actors:', time.time() - curr_time)
         # -------------------------------------
         # Post process rewards
         # -------------------------------------
+        curr_time = time.time()
 
         all_white_rewards = []
         all_black_rewards = []
         for idx, game in enumerate(games):
             uci_game = ' '.join([config.id2token[x] for x in game])
-            reward = calc_reward(self.engine, uci_game, n=self.nodes, pad=False)
-            reward = [x * 0.01 for x in reward]
-            white_rewards = []
-            black_rewards = []
-            for idx2, r in enumerate(reward):
-                if idx2 % 2 == 0:
-                    white_rewards.append(r)
-                else:
-                    black_rewards.append(r)
+            white_rewards, black_rewards = calc_reward(self.engine, uci_game, n=self.nodes, pad=False)
             all_white_rewards.append(white_rewards)
             all_black_rewards.append(black_rewards)
 
         avg_white_reward = np.mean([np.sum(x) for x in all_white_rewards])
         avg_black_reward = np.mean([np.sum(x) for x in all_black_rewards])
 
-        all_black_masks = []  # Black moves (0 - white, 1 - black)
-        all_white_masks = []  # White moves (1 - white, 0 - black)
-        all_black_masks_clip = []
-        all_white_masks_clip = []
-        for idx, game in enumerate(games):
-            black_mask = [x % 2 for x in range(len(game))]  # [0, 1, 0, 1, ...]
-            white_mask = [1 - x for x in black_mask]        # [1, 0, 1, 0, ...]
-            black_mask += [0] * (config.seq_length - len(black_mask))
-            white_mask += [0] * (config.seq_length - len(white_mask))
-            black_mask_clip = black_mask[:config.seq_length - 1]
-            white_mask_clip = white_mask[:config.seq_length - 1]
-            all_white_masks.append(white_mask)
-            all_black_masks.append(black_mask)
-            all_black_masks_clip.append(black_mask_clip)
-            all_white_masks_clip.append(white_mask_clip)
 
+        # print('\n\n-------------------------------------')
+        # print('White rewards g1:', all_white_rewards[0])
+        # print('Black rewards g1:', all_black_rewards[0])
+        # exit(0)
+    
+        # print('Time post process rewards:', time.time() - curr_time)
         # -------------------------------------
         # Sample Critic
         # -------------------------------------
+        curr_time = time.time()
 
         white_values = []
         black_values = []
@@ -451,24 +481,64 @@ class SelfPlayTaskA2(AbstractTask):
         for idx, values in zip(range(self.mini_batch_size), white_value_t):
             values_mask = white_action_mask[idx]
             w_values = []
-            for mask, v in zip(values_mask, values):
+            # for mask, v in zip(values_mask, values):
+            #     if mask == 1:
+            #         w_values.append(v)
+            for idx2, mask in enumerate(values_mask):
+                v = values[idx2]
                 if mask == 1:
                     w_values.append(v)
+                if mask == 0 and values_mask[idx2-1] == 1:  # also append value prediction after last action
+
+                    # If the game ended naturally, we do not use the extra value predition
+                    if nat_ended_games[idx] is True:
+                        all_white_rewards[idx].append(0)
+                        w_values.append(0)
+                    else:
+                        all_white_rewards[idx].append(v)
+                        w_values.append(v)
+
+
             white_values.append(w_values)
+
 
         black_value_t = self.sample_critic(critic_observation_buffer, white_turn=False)
         black_value_t = black_value_t.numpy().tolist()  # (30, 31)
         for idx, values in zip(range(self.mini_batch_size), black_value_t):
             values_mask = black_action_mask[idx]
             b_values = []
-            for mask, v in zip(values_mask, values):
+
+            for idx2, mask in enumerate(values_mask):
+                v = values[idx2]
                 if mask == 1:
                     b_values.append(v)
+                if mask == 0 and values_mask[idx2-1] == 1:  # also append value prediction after last action
+
+                    if nat_ended_games[idx] is True:
+                        all_black_rewards[idx].append(0)
+                        b_values.append(0)
+                    else:
+                        all_black_rewards[idx].append(v)
+                        b_values.append(v)
+
+
+
+
             black_values.append(b_values)
 
+        # print('\n\n-------------------------------------')
+        # print('White rewards g1:', all_white_rewards[0])
+        # print('White values g1:', white_values[0])
+
+        # print('Black rewards g1:', all_black_rewards[0])
+        # print('Black values g1:', black_values[0])
+        # exit(0)
+
+        # print('Time sample critic:', time.time() - curr_time)
         # -------------------------------------
-        # Calculate Advantage and Return
+        # Calculate Advantage and Returns
         # -------------------------------------
+        curr_time = time.time()
 
         all_white_advantages = []
         all_white_returns = []
@@ -479,6 +549,7 @@ class SelfPlayTaskA2(AbstractTask):
             w_rewards = np.array(all_white_rewards[idx])
             w_values = np.array(white_values[idx])
             w_deltas = w_rewards[:-1] + self.gamma * w_values[1:] - w_values[:-1]
+            # w_deltas = w_rewards[:-1] + self.gamma * w_rewards[1:] - w_rewards[:-1]
             w_advantages = discounted_cumulative_sums(w_deltas, self.gamma * self.lam)
             all_white_advantages.append(w_advantages)
             w_returns = discounted_cumulative_sums(w_rewards, self.gamma).tolist()
@@ -499,6 +570,7 @@ class SelfPlayTaskA2(AbstractTask):
             b_rewards = np.array(all_black_rewards[idx])
             b_values = np.array(black_values[idx])
             b_deltas = b_rewards[:-1] + self.gamma * b_values[1:] - b_values[:-1]
+            # b_deltas = b_rewards[:-1] + self.gamma * b_rewards[1:] - b_rewards[:-1]
             b_advantages = discounted_cumulative_sums(b_deltas, self.gamma * self.lam)
             all_black_advantages.append(b_advantages)
             b_returns = discounted_cumulative_sums(b_rewards, self.gamma).tolist()
@@ -512,8 +584,12 @@ class SelfPlayTaskA2(AbstractTask):
             all_black_advantages[idx] = self.pad_list(all_black_advantages[idx], pad_token=0, pad_len=config.seq_length)
         all_black_advantages = tf.convert_to_tensor(all_black_advantages, dtype=tf.float32)
 
+        # print('Time calculate advantages and returns:', time.time() - curr_time)
+        # -------------------------------------
+        # Construct model inputs
+        # -------------------------------------
+        curr_time = time.time()
 
-        # Create model inputs
         white_model_inputs = []
         white_cross_inputs = []
         white_color_inputs = []
@@ -535,35 +611,40 @@ class SelfPlayTaskA2(AbstractTask):
             black_cross_inputs.append(bci)
             black_color_inputs.append(False)
 
-        white_model_inputs = tf.convert_to_tensor(white_model_inputs, dtype=tf.float32)
-        white_cross_inputs = tf.convert_to_tensor(white_cross_inputs, dtype=tf.float32)
-        white_color_inputs = tf.convert_to_tensor(white_color_inputs, dtype=tf.bool)
+        # print('Time loop over inputs:', time.time() - curr_time)
+        curr_time = time.time()
 
-        black_model_inputs = tf.convert_to_tensor(black_model_inputs, dtype=tf.float32)
-        black_cross_inputs = tf.convert_to_tensor(black_cross_inputs, dtype=tf.float32)
-        black_color_inputs = tf.convert_to_tensor(black_color_inputs, dtype=tf.bool)
+        white_model_inputs = tf.convert_to_tensor(np.array(white_model_inputs, dtype=np.float32))
+        white_cross_inputs = tf.convert_to_tensor(np.array(white_cross_inputs, dtype=np.float32))
+        white_color_inputs = tf.convert_to_tensor(np.array(white_color_inputs, dtype=bool))
 
+        black_model_inputs = tf.convert_to_tensor(np.array(black_model_inputs, dtype=np.float32))
+        black_cross_inputs = tf.convert_to_tensor(np.array(black_cross_inputs, dtype=np.float32))
+        black_color_inputs = tf.convert_to_tensor(np.array(black_color_inputs, dtype=bool))
 
+        white_actions = tf.convert_to_tensor(np.array(white_actions, dtype=np.int32))
+        black_actions = tf.convert_to_tensor(np.array(black_actions, dtype=np.int32))
 
-        white_actions = tf.convert_to_tensor(white_actions, dtype=tf.int32)
-        black_actions = tf.convert_to_tensor(black_actions, dtype=tf.int32)
+        white_logprobs = tf.convert_to_tensor(np.array(white_logprobs, dtype=np.float32))
+        black_logprobs = tf.convert_to_tensor(np.array(black_logprobs, dtype=np.float32))
 
-        white_logprobs = tf.convert_to_tensor(white_logprobs, dtype=tf.float32)
-        black_logprobs = tf.convert_to_tensor(black_logprobs, dtype=tf.float32)
+        white_action_mask = tf.convert_to_tensor(np.array(white_action_mask, dtype=np.float32))
+        black_action_mask = tf.convert_to_tensor(np.array(black_action_mask, dtype=np.float32))
 
-        white_action_mask = tf.convert_to_tensor(white_action_mask, dtype=tf.float32)
-        black_action_mask = tf.convert_to_tensor(black_action_mask, dtype=tf.float32)
+        white_action_mask_critic = tf.convert_to_tensor(np.array(white_action_mask_critic, dtype=np.float32))
+        black_action_mask_critic = tf.convert_to_tensor(np.array(black_action_mask_critic, dtype=np.float32))
 
-        all_white_probs_full = tf.convert_to_tensor(all_white_probs_full, dtype=tf.float32)
-        all_black_probs_full = tf.convert_to_tensor(all_black_probs_full, dtype=tf.float32)
+        all_white_probs_full = tf.convert_to_tensor(np.array(all_white_probs_full, dtype=np.float32))
+        all_black_probs_full = tf.convert_to_tensor(np.array(all_black_probs_full, dtype=np.float32))
 
-        all_white_logprobs_full = tf.convert_to_tensor(all_white_logprobs_full, dtype=tf.float32)
-        all_black_logprobs_full = tf.convert_to_tensor(all_black_logprobs_full, dtype=tf.float32)
+        all_white_logprobs_full = tf.convert_to_tensor(np.array(all_white_logprobs_full, dtype=np.float32))
+        all_black_logprobs_full = tf.convert_to_tensor(np.array(all_black_logprobs_full, dtype=np.float32))
 
-
+        # print('Time convert full logprobs to tensor:', time.time() - curr_time)
         # -------------------------------------
         # Train Actor 1
         # -------------------------------------
+        # print('Training Actor 1...')
 
         if player_models.index(1) == 0:
             model_1_inputs = white_model_inputs
@@ -602,7 +683,7 @@ class SelfPlayTaskA2(AbstractTask):
                     model_1_logprobs_full,
                     model_1_probs_full
                 )
-                if abs(kl_1) > 1.5 * self.target_kl:
+                if abs(kl_1) > self.target_kl:
                     # Early Stopping
                     break
             kl_1 = kl_1.numpy()
@@ -611,69 +692,70 @@ class SelfPlayTaskA2(AbstractTask):
             policy_loss_1 = policy_loss_1.numpy()
         self.actor_updates += policy_update_itr
 
-        # print('Stats for Model 1:', 'kl', kl_1, 'entr', entr_1, 'loss', loss_1, 'policy_loss', policy_loss_1)
-        # exit(0)
 
-        # -------------------------------------
-        # Train Actor 2
-        # -------------------------------------
+        # # -------------------------------------
+        # # Train Actor 2
+        # # -------------------------------------
+        # curr_time = time.time()
 
-        if player_models.index(2) == 0:
-            model_2_inputs = white_model_inputs
-            model_2_cross = white_cross_inputs
-            model_2_color = white_color_inputs
-            model_2_action_buffer = white_actions
-            model_2_logprobs = white_logprobs
-            model_2_action_mask = white_action_mask
-            model_2_advantages = all_white_advantages
-            model_2_logprobs_full = all_white_logprobs_full
-            model_2_probs_full = all_white_probs_full
-        else:
-            model_2_inputs = black_model_inputs
-            model_2_cross = black_cross_inputs
-            model_2_color = black_color_inputs
-            model_2_action_buffer = black_actions
-            model_2_logprobs = black_logprobs
-            model_2_action_mask = black_action_mask
-            model_2_advantages = all_black_advantages
-            model_2_logprobs_full = all_black_logprobs_full
-            model_2_probs_full = all_black_probs_full
+        # if player_models.index(2) == 0:
+        #     model_2_inputs = white_model_inputs
+        #     model_2_cross = white_cross_inputs
+        #     model_2_color = white_color_inputs
+        #     model_2_action_buffer = white_actions
+        #     model_2_logprobs = white_logprobs
+        #     model_2_action_mask = white_action_mask
+        #     model_2_advantages = all_white_advantages
+        #     model_2_logprobs_full = all_white_logprobs_full
+        #     model_2_probs_full = all_white_probs_full
+        # else:
+        #     model_2_inputs = black_model_inputs
+        #     model_2_cross = black_cross_inputs
+        #     model_2_color = black_color_inputs
+        #     model_2_action_buffer = black_actions
+        #     model_2_logprobs = black_logprobs
+        #     model_2_action_mask = black_action_mask
+        #     model_2_advantages = all_black_advantages
+        #     model_2_logprobs_full = all_black_logprobs_full
+        #     model_2_probs_full = all_black_probs_full
 
-        policy_update_itr = 0
+        # policy_update_itr = 0
         kl_2, entr_2, loss_2, policy_loss_2 = 0, 0, 0, 0
-        if self.curr_epoch >= critic_warmup_epochs:
-            for i in range(self.train_actor_iterations):
-                policy_update_itr += 1
-                kl_2, entr_2, loss_2, policy_loss_2 = self.train_actor_2(
-                    model_2_inputs, model_2_cross, model_2_color,
-                    model_2_action_buffer,
-                    model_2_logprobs,
-                    model_2_action_mask,
-                    model_2_advantages,
+        # if self.curr_epoch >= critic_warmup_epochs:
+        #     for i in range(self.train_actor_iterations):
+        #         policy_update_itr += 1
+        #         kl_2, entr_2, loss_2, policy_loss_2 = self.train_actor_2(
+        #             model_2_inputs, model_2_cross, model_2_color,
+        #             model_2_action_buffer,
+        #             model_2_logprobs,
+        #             model_2_action_mask,
+        #             model_2_advantages,
 
-                    model_2_logprobs_full,
-                    model_2_probs_full
-                )
-                if abs(kl_2) > 1.5 * self.target_kl:
-                    # Early Stopping
-                    break
-            kl_2 = kl_2.numpy()
-            entr_2 = entr_2.numpy()
-            loss_2 = loss_2.numpy()
-            policy_loss_2 = policy_loss_2.numpy()
-        self.actor_updates += policy_update_itr
+        #             model_2_logprobs_full,
+        #             model_2_probs_full
+        #         )
+        #         if abs(kl_2) > self.target_kl:
+        #             # Early Stopping
+        #             break
+        #     kl_2 = kl_2.numpy()
+        #     entr_2 = entr_2.numpy()
+        #     loss_2 = loss_2.numpy()
+        #     policy_loss_2 = policy_loss_2.numpy()
+        # self.actor_updates += policy_update_itr
 
-        # print('Stats for Model 2:', 'kl', kl_2, 'entr', entr_2, 'loss', loss_2, 'policy_loss', policy_loss_2)
-        # exit(0)
 
+        # print('Time train actor 2:', time.time() - curr_time)
         # -------------------------------------
         # Train Critic
         # -------------------------------------
+        # print('Training Critic...')
+        curr_time = time.time()
 
         combined_model_inputs = tf.concat([white_model_inputs, black_model_inputs], axis=0)
         combined_cross_inputs = tf.concat([white_cross_inputs, black_cross_inputs], axis=0)
         combined_color_inputs = tf.concat([white_color_inputs, black_color_inputs], axis=0)
-        combined_mask_inputs = tf.concat([white_action_mask, black_action_mask], axis=0)
+        # combined_mask_inputs = tf.concat([white_action_mask, black_action_mask], axis=0)
+        combined_mask_inputs = tf.concat([white_action_mask_critic, black_action_mask_critic], axis=0)
 
         all_white_returns_tensor = tf.convert_to_tensor(all_white_returns, dtype=tf.float32)
         all_black_returns_tensor = tf.convert_to_tensor(all_black_returns, dtype=tf.float32)
@@ -689,8 +771,7 @@ class SelfPlayTaskA2(AbstractTask):
 
         self.c_loss.append(value_loss)
 
-
-
+        # print('Time train critic:', time.time() - curr_time)
         # -------------------------------------
         # Run Statistics
         # -------------------------------------
@@ -718,17 +799,23 @@ class SelfPlayTaskA2(AbstractTask):
 
 
 
+    
 
+    
+    
+    
+    
+    
+    
+    # @tf.function(input_signature=[
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None,), dtype=tf.bool),
+    #     tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    # ])
 
-
-
-    @tf.function(input_signature=[
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None,), dtype=tf.bool),
-        tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-    ])
+    @tf.function(jit_compile=True)
     def train_critic(
             self,
             input_tensor, cross_tensor, is_white_tensor,
@@ -749,19 +836,20 @@ class SelfPlayTaskA2(AbstractTask):
         self.critic_optimizer.apply_gradients(zip(critic_grads, self.c_critic.trainable_variables))
         return value_loss
 
-    @tf.function(input_signature=[
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None,), dtype=tf.bool),
+    # @tf.function(input_signature=[
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None,), dtype=tf.bool),
 
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
 
-        tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
-    ])
+    #     tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
+    # ])
+    @tf.function(jit_compile=True)
     def train_actor_1(
             self,
             input_tensor, cross_tensor, is_white_tensor,
@@ -775,43 +863,68 @@ class SelfPlayTaskA2(AbstractTask):
     ):
         inputs = [input_tensor, cross_tensor, is_white_tensor]
         with tf.GradientTape() as tape:
-            pred_probs, pred_vals = self.c_actor(inputs)  # shape: (batch, seq_len, 2)
-            pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
+            # pred_probs, pred_vals = self.c_actor(inputs)  # shape: (batch, seq_len, 2)
+            # pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
 
-            # --- Find true advantage
-            pred_log_probs = tf.math.log(pred_probs + 1e-10)  # shape: (batch, seq_len, 2)
-            pred_log_probs = tf.cast(pred_log_probs, dtype=tf.float32)
-            one_hot_actions = tf.one_hot(action_buffer, self.num_actions)
-            one_hot_actions = tf.cast(one_hot_actions, dtype=tf.float32)
-            logprobability = tf.reduce_sum(
-                one_hot_actions * pred_log_probs, axis=-1
-            )  # shape (batch, seq_len)
-            color_logprobs = logprobability * color_action_mask_tensor
-            color_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
-            white_ratio = tf.exp(
-                color_logprobs - color_logprobs_buffer
-            )
-            white_true_advantage = white_ratio * color_advantage_buffer
+            # # --- Find true advantage
+            # pred_log_probs = tf.math.log(pred_probs + 1e-10)  # shape: (batch, seq_len, 2)
+            # pred_log_probs = tf.cast(pred_log_probs, dtype=tf.float32)
+            # one_hot_actions = tf.one_hot(action_buffer, self.num_actions)
+            # one_hot_actions = tf.cast(one_hot_actions, dtype=tf.float32)
+            # logprobability = tf.reduce_sum(
+            #     one_hot_actions * pred_log_probs, axis=-1
+            # )  # shape (batch, seq_len)
+            # color_logprobs = logprobability * color_action_mask_tensor
+            # color_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
+            # white_ratio = tf.exp(
+            #     color_logprobs - color_logprobs_buffer
+            # )
+            # white_true_advantage = white_ratio * color_advantage_buffer
 
-            # --- Find min advantage
-            white_min_advantage = tf.where(
-                color_advantage_buffer > 0,
-                (1 + self.clip_ratio) * color_advantage_buffer,
-                (1 - self.clip_ratio) * color_advantage_buffer,
-            )
+            # # --- Find min advantage
+            # white_min_advantage = tf.where(
+            #     color_advantage_buffer > 0,
+            #     (1 + self.clip_ratio) * color_advantage_buffer,
+            #     (1 - self.clip_ratio) * color_advantage_buffer,
+            # )
 
-            policy_loss = -tf.reduce_mean(
-                tf.minimum(white_true_advantage, white_min_advantage)
-            )
-            loss = 0
-            loss += policy_loss
+            # policy_loss = -tf.reduce_mean(
+            #     tf.minimum(white_true_advantage, white_min_advantage)
+            # )
+            # loss = 0
+            # loss += policy_loss
 
-            entr = -tf.reduce_sum(pred_probs * pred_log_probs, axis=-1)  # shape (batch, seq_len)
-            entr = tf.reduce_mean(entr)  # Higher positive value means more exploration - shape (batch,)
-            loss = loss - (self.entropy_coef * entr)
+            # entr = -tf.reduce_sum(pred_probs * pred_log_probs, axis=-1)  # shape (batch, seq_len)
+            # entr = tf.reduce_mean(entr * color_action_mask_tensor)  # Higher positive value means more exploration - shape (batch,)
+            # loss = loss - (self.entropy_coef * entr)
 
-            if config.mixed_precision is True:
-                loss = self.actor_optimizer.get_scaled_loss(loss)
+            # if config.mixed_precision is True:
+            #     loss = self.actor_optimizer.get_scaled_loss(loss)
+
+
+            logits, _ = self.c_actor(inputs)
+            probs     = tf.nn.softmax(logits, axis=-1)
+            logp      = tf.math.log(tf.clip_by_value(probs, 1e-10, 1.))
+
+            onehot    = tf.one_hot(action_buffer, self.num_actions, dtype=tf.float32)
+            new_logp  = tf.reduce_sum(onehot * logp, axis=-1)
+
+            old_logp  = tf.stop_gradient(logprobability_buffer)
+            A_t       = tf.stop_gradient(color_advantage_buffer)
+
+            ratio     = tf.exp(new_logp - old_logp)
+            clipped   = tf.clip_by_value(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
+            surrogate = tf.minimum(ratio * A_t, clipped * A_t)
+
+            surrogate = surrogate * color_action_mask_tensor
+            policy_loss = -tf.reduce_mean(surrogate)
+
+            entr = -tf.reduce_sum(probs * logp, axis=-1)
+            entr = tf.reduce_mean(entr * color_action_mask_tensor)
+
+            loss = policy_loss - self.entropy_coef * entr
+            if config.mixed_precision:
+                loss = self.actor_optimizer_2.get_scaled_loss(loss)
 
         gradients = tape.gradient(loss, self.c_actor.trainable_variables)
         if config.mixed_precision is True:
@@ -819,22 +932,6 @@ class SelfPlayTaskA2(AbstractTask):
 
 
         self.actor_optimizer.apply_gradients(zip(gradients, self.c_actor.trainable_variables))
-
-        #  KL Divergence
-        # pred_probs, pred_vals = self.c_actor(inputs)
-        # pred_probs = tf.nn.softmax(pred_probs, axis=-1)
-        # pred_log_probs = tf.math.log(pred_probs)
-        # one_hot_actions = tf.one_hot(action_buffer, self.num_actions)
-        # one_hot_actions = tf.cast(one_hot_actions, dtype=tf.float32)
-        # logprobability = tf.reduce_sum(
-        #     one_hot_actions * pred_log_probs, axis=-1
-        # )  # shape (batch, seq_len)
-        # color_logprobs = logprobability * color_action_mask_tensor
-        # color_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
-        # kl = tf.reduce_mean(
-        #     color_logprobs_buffer - color_logprobs
-        # )
-        # kl_old = tf.reduce_sum(kl)
 
         # True KL Divergence
         mask_tensor = tf.expand_dims(color_action_mask_tensor, axis=-1)
@@ -853,19 +950,20 @@ class SelfPlayTaskA2(AbstractTask):
 
         return kl, entr, loss, policy_loss
 
-    @tf.function(input_signature=[
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None,), dtype=tf.bool),
+    # @tf.function(input_signature=[
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None,), dtype=tf.bool),
 
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.float32),
 
-        tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
-    ])
+    #     tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
+    #     tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
+    # ])
+    @tf.function(jit_compile=True)
     def train_actor_2(
             self,
             input_tensor, cross_tensor, is_white_tensor,
@@ -879,42 +977,67 @@ class SelfPlayTaskA2(AbstractTask):
     ):
         inputs = [input_tensor, cross_tensor, is_white_tensor]
         with tf.GradientTape() as tape:
-            pred_probs, pred_vals = self.c_actor_2(inputs)  # shape: (batch, seq_len, 2)
-            pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape: (batch, seq_len, 2)
+            # pred_probs, pred_vals = self.c_actor_2(inputs)  
+            # pred_probs = tf.nn.softmax(pred_probs, axis=-1)  
 
-            # --- Find true advantage
-            pred_log_probs = tf.math.log(pred_probs)  # shape: (batch, seq_len, 2)
-            pred_log_probs = tf.cast(pred_log_probs, dtype=tf.float32)
-            one_hot_actions = tf.one_hot(action_buffer, self.num_actions)
-            one_hot_actions = tf.cast(one_hot_actions, dtype=tf.float32)
-            logprobability = tf.reduce_sum(
-                one_hot_actions * pred_log_probs, axis=-1
-            )  # shape (batch, seq_len)
-            white_logprobs = logprobability * color_action_mask_tensor
-            white_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
-            white_ratio = tf.exp(
-                white_logprobs - white_logprobs_buffer
-            )
-            white_true_advantage = white_ratio * color_advantage_buffer
+            # # --- Find true advantage
+            # pred_log_probs = tf.math.log(pred_probs)  
+            # pred_log_probs = tf.cast(pred_log_probs, dtype=tf.float32)
+            # one_hot_actions = tf.one_hot(action_buffer, self.num_actions)
+            # one_hot_actions = tf.cast(one_hot_actions, dtype=tf.float32)
+            # logprobability = tf.reduce_sum(
+            #     one_hot_actions * pred_log_probs, axis=-1
+            # )  
+            # white_logprobs = logprobability * color_action_mask_tensor
+            # white_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
+            # white_ratio = tf.exp(
+            #     white_logprobs - white_logprobs_buffer
+            # )
+            # white_true_advantage = white_ratio * color_advantage_buffer
 
-            # --- Find min advantage
-            white_min_advantage = tf.where(
-                color_advantage_buffer > 0,
-                (1 + self.clip_ratio) * color_advantage_buffer,
-                (1 - self.clip_ratio) * color_advantage_buffer,
-            )
+            # # --- Find min advantage
+            # white_min_advantage = tf.where(
+            #     color_advantage_buffer > 0,
+            #     (1 + self.clip_ratio) * color_advantage_buffer,
+            #     (1 - self.clip_ratio) * color_advantage_buffer,
+            # )
 
-            policy_loss = -tf.reduce_mean(
-                tf.minimum(white_true_advantage, white_min_advantage)
-            )
-            loss = 0
-            loss += policy_loss
+            # policy_loss = -tf.reduce_mean(
+            #     tf.minimum(white_true_advantage, white_min_advantage)
+            # )
+            # loss = 0
+            # loss += policy_loss
 
-            entr = -tf.reduce_sum(pred_probs * pred_log_probs, axis=-1)  # shape (batch, seq_len)
-            entr = tf.reduce_mean(entr)  # Higher positive value means more exploration - shape (batch,)
-            loss = loss - (self.entropy_coef * entr)
+            # entr = -tf.reduce_sum(pred_probs * pred_log_probs, axis=-1)  
+            # entr = tf.reduce_mean(entr * color_action_mask_tensor)
+            # loss = loss - (self.entropy_coef * entr)
 
-            if config.mixed_precision is True:
+            # if config.mixed_precision is True:
+            #     loss = self.actor_optimizer_2.get_scaled_loss(loss)
+
+
+            logits, _ = self.c_actor_2(inputs)
+            probs     = tf.nn.softmax(logits, axis=-1)
+            logp      = tf.math.log(tf.clip_by_value(probs, 1e-10, 1.))
+
+            onehot    = tf.one_hot(action_buffer, self.num_actions, dtype=tf.float32)
+            new_logp  = tf.reduce_sum(onehot * logp, axis=-1)
+
+            old_logp  = tf.stop_gradient(logprobability_buffer)
+            A_t       = tf.stop_gradient(color_advantage_buffer)
+
+            ratio     = tf.exp(new_logp - old_logp)
+            clipped   = tf.clip_by_value(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
+            surrogate = tf.minimum(ratio * A_t, clipped * A_t)
+
+            surrogate = surrogate * color_action_mask_tensor
+            policy_loss = -tf.reduce_mean(surrogate)
+
+            entr = -tf.reduce_sum(probs * logp, axis=-1)
+            entr = tf.reduce_mean(entr * color_action_mask_tensor)
+
+            loss = policy_loss - self.entropy_coef * entr
+            if config.mixed_precision:
                 loss = self.actor_optimizer_2.get_scaled_loss(loss)
 
         gradients = tape.gradient(loss, self.c_actor_2.trainable_variables)
@@ -922,22 +1045,6 @@ class SelfPlayTaskA2(AbstractTask):
             gradients = self.actor_optimizer_2.get_unscaled_gradients(gradients)
 
         self.actor_optimizer_2.apply_gradients(zip(gradients, self.c_actor_2.trainable_variables))
-
-        #  KL Divergence
-        # pred_probs, pred_vals = self.c_actor_2(inputs)
-        # pred_probs = tf.nn.softmax(pred_probs, axis=-1)
-        # pred_log_probs = tf.math.log(pred_probs)
-        # one_hot_actions = tf.one_hot(action_buffer, self.num_actions)
-        # one_hot_actions = tf.cast(one_hot_actions, dtype=tf.float32)
-        # logprobability = tf.reduce_sum(
-        #     one_hot_actions * pred_log_probs, axis=-1
-        # )  # shape (batch, seq_len)
-        # color_logprobs = logprobability * color_action_mask_tensor
-        # color_logprobs_buffer = logprobability_buffer * color_action_mask_tensor
-        # kl = tf.reduce_mean(
-        #     color_logprobs_buffer - color_logprobs
-        # )
-        # kl = tf.reduce_sum(kl)
 
         # True KL Divergence
         mask_tensor = tf.expand_dims(color_action_mask_tensor, axis=-1)
@@ -950,10 +1057,267 @@ class SelfPlayTaskA2(AbstractTask):
         true_kl = tf.reduce_sum(
             color_probs_full * (color_logprobs_full - pred_log_probs),
             axis=-1
-        )  # shape (9, 280)
-        kl = tf.reduce_mean(true_kl)  # shape (1,)
-
+        )  
+        kl = tf.reduce_mean(true_kl) 
         return kl, entr, loss, policy_loss
+
+
+
+
+
+
+
+
+
+    
+    
+    def has_game_ended(self, game, actor):
+        uci_moves = [config.id2token[x] for x in game]
+        last_move = uci_moves[-1]
+        prev_moves = uci_moves[:-1]  # Remove the last move, which is the current move
+
+        if actor == 1:
+            prefix = 'model_1'
+        else:
+            prefix = 'model_2'
+
+        board = chess.Board()
+        for move in prev_moves:
+            try:
+                board.push(chess.Move.from_uci(move))
+            except ValueError:
+                raise ValueError(f"Invalid previous move in game: {move} in {uci_moves}")
+
+        # --- check illegal token / move ---
+        if last_move in config.non_move_tokens:
+            print('Illegal token detected in game:', uci_moves)
+            return True
+        uci_move = chess.Move.from_uci(last_move)
+        if uci_move not in board.legal_moves:
+            self.additional_info[prefix + '_illegal_moves'][-1] += 1
+            # print('Illegal move detected in game:', uci_moves)
+            return True
+        board.push(uci_move)
+
+        # --- check if the game has ended ---
+        if board.is_checkmate():
+            self.additional_info[prefix + '_checkmates'][-1] += 1
+            # print('Checkmate detected in game:', uci_moves)
+            return True
+        if board.is_stalemate():
+            print('Stalemate detected in game:', uci_moves)
+            return True
+
+        return False
+    
+    
+    def sample_actor(self, observation, white_turn, actor=1):
+        all_model_moves = []
+        all_cross_moves = []
+        all_white_turns = []
+        max_inf_idx = 0
+        all_inf_idx = []
+        for obs in observation:
+            mm, cm, inf_idx = get_inputs_from_game(obs, white_turn)
+            mm = self.pad_list(mm, pad_len=config.seq_length)
+            cm = self.pad_list(cm, pad_len=config.seq_length)
+            all_model_moves.append(mm)
+            all_cross_moves.append(cm)
+            all_white_turns.append(white_turn)
+            all_inf_idx.append(inf_idx)
+            if inf_idx > max_inf_idx:
+                max_inf_idx = inf_idx
+        inf_idx = max_inf_idx
+        model_moves = tf.convert_to_tensor(all_model_moves, dtype=tf.int32)
+        cross_moves = tf.convert_to_tensor(all_cross_moves, dtype=tf.int32)
+        is_white = tf.convert_to_tensor(all_white_turns, dtype=tf.bool)
+        # print('All inference indices:', all_inf_idx, inf_idx)
+        if actor == 1:
+            # print('Sampling model 1')
+            return self._sample_actor_1(model_moves, cross_moves, is_white, inf_idx)
+        else:
+            # print('Sampling model 2')
+            # return self._sample_actor_2(model_moves, cross_moves, is_white, inf_idx)
+            return self._sample_actor_2_new(model_moves, cross_moves, is_white, inf_idx)
+        
+
+    def sample_engine(self, observation, white_turn, actor=1):
+        actions_log_prob = []
+        actions = []
+        all_token_probs = []
+        all_token_log_probs = []
+
+        for obs in observation:
+            uci_move = get_engine_move(obs, self.engine)
+            if uci_move is None:
+                uci_move_id = 0
+            else:
+                uci_move_id = int(config.token2id[uci_move])
+
+            actions_log_prob.append(0.0)  # Engine does not provide log probability
+            actions.append(uci_move_id)  # Engine always returns a single move
+            all_token_probs.append([0.0 for x in range(config.vocab_size)])  # Engine always
+            all_token_log_probs.append([0.0 for x in range(config.vocab_size)])  # returns a single move
+
+        actions_log_prob = tf.convert_to_tensor(actions_log_prob, dtype=tf.float32)
+        actions = tf.convert_to_tensor(actions, dtype=tf.int32)
+        all_token_probs = tf.convert_to_tensor(all_token_probs, dtype=tf.float32)
+        all_token_log_probs = tf.convert_to_tensor(all_token_log_probs, dtype=tf.float32)
+        return actions_log_prob, actions, all_token_probs, all_token_log_probs
+
+
+
+
+
+
+
+
+
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None,), dtype=tf.bool),
+        tf.TensorSpec(shape=(), dtype=tf.int32)
+    ])
+    # @tf.function(jit_compile=True, reduce_retracing=True)
+    def _sample_actor_1(self, model_moves, cross_moves, is_white, inf_idx):
+        observation_input = [model_moves, cross_moves, is_white]
+        pred_probs, pred_values = self.c_actor.call_tf(observation_input)
+        pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
+        all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
+        all_token_log_probs = tf.math.log(all_token_probs + 1e-10)
+        samples = tf.random.categorical(all_token_log_probs, 1)  # shape (batch, 1)
+        next_bit_ids = tf.squeeze(samples, axis=-1)  # shape (batch,)
+        batch_indices = tf.range(0, tf.shape(all_token_log_probs)[0], dtype=tf.int64)  # shape (batch,)
+        next_bit_probs = tf.gather_nd(all_token_log_probs, tf.stack([batch_indices, next_bit_ids], axis=-1))
+        actions = next_bit_ids  # (batch,)
+        actions_log_prob = next_bit_probs  # (batch,)
+        return actions_log_prob, actions, all_token_probs, all_token_log_probs
+
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None,), dtype=tf.bool),
+        tf.TensorSpec(shape=(), dtype=tf.int32)
+    ])
+    # @tf.function(jit_compile=True, reduce_retracing=True)
+    def _sample_actor_2(self, model_moves, cross_moves, is_white, inf_idx):
+        observation_input = [model_moves, cross_moves, is_white]
+        pred_probs, pred_values = self.c_actor_2.call_tf(observation_input)
+        pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
+        all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
+        all_token_log_probs = tf.math.log(all_token_probs + 1e-10)
+        samples = tf.random.categorical(all_token_log_probs, 1)  # shape (batch, 1)
+        next_bit_ids = tf.squeeze(samples, axis=-1)  # shape (batch,)
+        batch_indices = tf.range(0, tf.shape(all_token_log_probs)[0], dtype=tf.int64)  # shape (batch,)
+        next_bit_probs = tf.gather_nd(all_token_log_probs, tf.stack([batch_indices, next_bit_ids], axis=-1))
+        actions = next_bit_ids  # (batch,)
+        actions_log_prob = next_bit_probs  # (batch,)
+        return actions_log_prob, actions, all_token_probs, all_token_log_probs
+
+
+
+
+
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None,), dtype=tf.bool),
+        tf.TensorSpec(shape=(), dtype=tf.int32)
+    ])
+    def _sample_actor_1_new(self,
+                    model_moves,
+                    cross_moves,
+                    is_white,
+                    inf_idx):
+        top_k = 5
+        """Generate one action per batch element using top-k sampling."""
+        # ──────────────────────────────
+        # 1. Forward pass
+        # ──────────────────────────────
+        observation_input = [model_moves, cross_moves, is_white]
+        pred_logits, pred_values = self.c_actor.call_tf(observation_input)
+        pred_probs  = tf.nn.softmax(pred_logits, axis=-1)          # (B, L, V)
+        all_probs   = pred_probs[:, inf_idx, :]                    # (B, V)
+        log_probs   = tf.math.log(all_probs + 1e-10)               # (B, V)
+
+        # ──────────────────────────────
+        # 2. Top-k filtering
+        # ──────────────────────────────
+        k           = tf.minimum(top_k, tf.shape(all_probs)[-1])   # guard against k>V
+        topk_vals, topk_ids = tf.math.top_k(all_probs, k=k)        # each (B, k)
+        topk_log    = tf.math.log(topk_vals + 1e-10)               # (B, k)
+
+        # ──────────────────────────────
+        # 3. Sample inside the top-k set
+        # ──────────────────────────────
+        sampled_pos = tf.squeeze(tf.random.categorical(topk_log, 1), axis=-1)  # (B,)
+        next_ids    = tf.gather(topk_ids, sampled_pos, batch_dims=1)           # (B,)
+
+        # ──────────────────────────────
+        # 4. Retrieve log-prob *under the full policy*
+        #    (needed for advantage–based or off-policy losses)
+        # ──────────────────────────────
+        batch_idx   = tf.range(tf.shape(log_probs)[0], dtype=tf.int32)         # (B,)
+        act_logprob = tf.gather_nd(log_probs, tf.stack([batch_idx, next_ids], axis=-1))  # (B,)
+
+        # ──────────────────────────────
+        # 5. Return same tuple shape as before
+        # ──────────────────────────────
+        return act_logprob, next_ids, all_probs, log_probs
+
+
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
+        tf.TensorSpec(shape=(None,), dtype=tf.bool),
+        tf.TensorSpec(shape=(), dtype=tf.int32)
+    ])
+    def _sample_actor_2_new(self,
+                    model_moves,
+                    cross_moves,
+                    is_white,
+                    inf_idx):
+        top_k = 2
+        """Generate one action per batch element using top-k sampling."""
+        # ──────────────────────────────
+        # 1. Forward pass
+        # ──────────────────────────────
+        observation_input = [model_moves, cross_moves, is_white]
+        pred_logits, pred_values = self.c_actor_2.call_tf(observation_input)
+        pred_probs  = tf.nn.softmax(pred_logits, axis=-1)          # (B, L, V)
+        all_probs   = pred_probs[:, inf_idx, :]                    # (B, V)
+        log_probs   = tf.math.log(all_probs + 1e-10)               # (B, V)
+
+        # ──────────────────────────────
+        # 2. Top-k filtering
+        # ──────────────────────────────
+        k           = tf.minimum(top_k, tf.shape(all_probs)[-1])   # guard against k>V
+        topk_vals, topk_ids = tf.math.top_k(all_probs, k=k)        # each (B, k)
+        topk_log    = tf.math.log(topk_vals + 1e-10)               # (B, k)
+
+        # ──────────────────────────────
+        # 3. Sample inside the top-k set
+        # ──────────────────────────────
+        sampled_pos = tf.squeeze(tf.random.categorical(topk_log, 1), axis=-1)  # (B,)
+        next_ids    = tf.gather(topk_ids, sampled_pos, batch_dims=1)           # (B,)
+
+        # ──────────────────────────────
+        # 4. Retrieve log-prob *under the full policy*
+        #    (needed for advantage–based or off-policy losses)
+        # ──────────────────────────────
+        batch_idx   = tf.range(tf.shape(log_probs)[0], dtype=tf.int32)         # (B,)
+        act_logprob = tf.gather_nd(log_probs, tf.stack([batch_idx, next_ids], axis=-1))  # (B,)
+
+        # ──────────────────────────────
+        # 5. Return same tuple shape as before
+        # ──────────────────────────────
+        return act_logprob, next_ids, all_probs, log_probs
+
+
+
+
+
 
     def sample_critic(self, observation, white_turn=True):
         all_model_moves = []
@@ -987,141 +1351,6 @@ class SelfPlayTaskA2(AbstractTask):
         t_value = t_value[:, :, 0]
         return t_value
 
-    def sample_actor(self, observation, white_turn, actor=1):
-        all_model_moves = []
-        all_cross_moves = []
-        all_white_turns = []
-        max_inf_idx = 0
-        all_inf_idx = []
-        for obs in observation:
-            mm, cm, inf_idx = get_inputs_from_game(obs, white_turn)
-            mm = self.pad_list(mm, pad_len=config.seq_length)
-            cm = self.pad_list(cm, pad_len=config.seq_length)
-            all_model_moves.append(mm)
-            all_cross_moves.append(cm)
-            all_white_turns.append(white_turn)
-            all_inf_idx.append(inf_idx)
-            if inf_idx > max_inf_idx:
-                max_inf_idx = inf_idx
-        inf_idx = max_inf_idx
-        model_moves = tf.convert_to_tensor(all_model_moves, dtype=tf.int32)
-        cross_moves = tf.convert_to_tensor(all_cross_moves, dtype=tf.int32)
-        is_white = tf.convert_to_tensor(all_white_turns, dtype=tf.bool)
-        # print('All inference indices:', all_inf_idx, inf_idx)
-        if actor == 1:
-            # print('Sampling model 1')
-            return self._sample_actor_1(model_moves, cross_moves, is_white, inf_idx)
-        else:
-            # print('Sampling model 2')
-            return self._sample_actor_2(model_moves, cross_moves, is_white, inf_idx)
-
-
-    @tf.function(input_signature=[
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
-        tf.TensorSpec(shape=(None,), dtype=tf.bool),
-        tf.TensorSpec(shape=(), dtype=tf.int32)
-    ])
-    def _sample_actor_1(self, model_moves, cross_moves, is_white, inf_idx):
-        observation_input = [model_moves, cross_moves, is_white]
-        pred_probs, pred_values = self.c_actor(observation_input)
-        pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
-        all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
-        all_token_log_probs = tf.math.log(all_token_probs + 1e-10)
-        samples = tf.random.categorical(all_token_log_probs, 1)  # shape (batch, 1)
-        next_bit_ids = tf.squeeze(samples, axis=-1)  # shape (batch,)
-        batch_indices = tf.range(0, tf.shape(all_token_log_probs)[0], dtype=tf.int64)  # shape (batch,)
-        next_bit_probs = tf.gather_nd(all_token_log_probs, tf.stack([batch_indices, next_bit_ids], axis=-1))
-        actions = next_bit_ids  # (batch,)
-        actions_log_prob = next_bit_probs  # (batch,)
-        return actions_log_prob, actions, all_token_probs, all_token_log_probs
-
-    @tf.function(input_signature=[
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),  # shape=(global_mini_batch_size, None)
-        tf.TensorSpec(shape=(None,), dtype=tf.bool),
-        tf.TensorSpec(shape=(), dtype=tf.int32)
-    ])
-    def _sample_actor_2(self, model_moves, cross_moves, is_white, inf_idx):
-        observation_input = [model_moves, cross_moves, is_white]
-        pred_probs, pred_values = self.c_actor_2(observation_input)
-        pred_probs = tf.nn.softmax(pred_probs, axis=-1)  # shape (batch, seq_len, vocab_size)
-        all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
-        all_token_log_probs = tf.math.log(all_token_probs + 1e-10)
-        samples = tf.random.categorical(all_token_log_probs, 1)  # shape (batch, 1)
-        next_bit_ids = tf.squeeze(samples, axis=-1)  # shape (batch,)
-        batch_indices = tf.range(0, tf.shape(all_token_log_probs)[0], dtype=tf.int64)  # shape (batch,)
-        next_bit_probs = tf.gather_nd(all_token_log_probs, tf.stack([batch_indices, next_bit_ids], axis=-1))
-        actions = next_bit_ids  # (batch,)
-        actions_log_prob = next_bit_probs  # (batch,)
-        return actions_log_prob, actions, all_token_probs, all_token_log_probs
-
-
-
-
-    def calc_reward(self, game, prev_eval, board, actor):
-        uci_moves = [config.id2token[x] for x in game]
-        last_move = uci_moves[-1]
-
-        if actor == 1:
-            prefix = 'model_1'
-        else:
-            prefix = 'model_2'
-
-
-        # 0. Determine the turn color
-        white_turn = (board.turn == chess.WHITE)
-
-        # # check if it is checkmate
-        # if board.is_checkmate():
-        #     # this means the current player is checkmated. win for other side
-        #     if white_turn is True:
-        #         winning_token = '[black]'
-        #     else:
-        #         winning_token = '[white]'
-        #     # print('\nCheckmate prediction token:', last_move, 'Winning token:', winning_token)
-        #     # print('Move sequence string:', ' '.join(uci_moves))
-        #     if last_move == winning_token:
-        #         self.additional_info[prefix + '_win_predictions'][-1] += 1
-        #         return 1.0, True, prev_eval
-        #     else:
-        #         return -1.0, True, prev_eval
-        # elif board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves() or board.is_fivefold_repetition():
-        #     if last_move == '[draw]':
-        #         self.additional_info[prefix + '_win_predictions'][-1] += 1
-        #         return 1.0, True, prev_eval
-        #     else:
-        #         return -1.0, True, prev_eval
-
-
-        # 1. Check if a legal move has been made
-        if last_move not in config.non_move_tokens:
-            move = chess.Move.from_uci(last_move)
-            if move not in board.legal_moves:
-                self.additional_info[prefix + '_illegal_moves'][-1] += 1
-                return -1, True, prev_eval  # Illegal UCI
-        else:
-            self.additional_info[prefix + '_illegal_moves'][-1] += 1
-            return -1, True, prev_eval  # Illegal special token move
-
-
-        # -------------------------------------
-        # Push move
-        # -------------------------------------
-        board.push(move)
-
-        # 2. Check if checkmate
-        if board.is_checkmate():
-            # print('\nCheckmate played\n')
-            self.additional_info[prefix + '_checkmates'][-1] += 1
-            return 1.0, True, prev_eval
-
-        # 3. Check if draw
-        if board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves() or board.is_fivefold_repetition():
-            return -0.1, True, prev_eval
-
-        return 0.0, False, prev_eval
-
 
 
 
@@ -1141,8 +1370,8 @@ class SelfPlayTaskA2(AbstractTask):
             'model_2_entropy': 'ent2',
             'model_1_kl': 'kl1',
             'model_2_kl': 'kl2',
-            'model_1_loss': 'l1',
-            'model_2_loss': 'l2',
+            # 'model_1_loss': 'l1',
+            # 'model_2_loss': 'l2',
 
         }
         display_key_keys = list(display_keys.keys())
@@ -1153,34 +1382,17 @@ class SelfPlayTaskA2(AbstractTask):
                 disp_key = display_keys[key]
                 value = self.additional_info[key]
                 print(f"{disp_key}: {value[-1]:.4f}", end=' | ')
-            print('c_loss', self.c_loss[-1].numpy(), '|', 'model updates', self.actor_updates)
+            # print('c_loss', self.c_loss[-1].numpy(), '|', 'model updates', self.actor_updates)
+            print('c_loss', self.c_loss[-1].numpy())
+
 
         if len(self.additional_info['model_1_return']) % self.plot_freq == 0:
             print('--> PLOTTING')
             self.plot_ppo()
-            self.plot_models()
-            self.run_evals()
         else:
             return
 
 
-
-    def run_evals(self):
-        if run_evals is False:
-            return
-        evals = ['opening', 'middlegame', 'endgame', 'equality', 'advantage', 'mate', 'fork', 'pin']
-
-        # Evals for model 1
-        eval_history = self.eval.run_eval(self.c_actor)
-        eval_history['step_interval'] = global_mini_batch_size
-        save_name = 'a1_evals_val_' + str(self.val_itr) + '.png'
-        plot_training_comparison([eval_history], bounds=False, save_name=save_name, local_save_dir=self.run_dir)
-
-        # Evals for model 2
-        eval_history = self.eval2.run_eval(self.c_actor_2)
-        eval_history['step_interval'] = global_mini_batch_size
-        save_name = 'a2_evals_val_' + str(self.val_itr) + '.png'
-        plot_training_comparison([eval_history], bounds=False, save_name=save_name, local_save_dir=self.run_dir)
 
     def plot_ppo(self):
 
@@ -1236,60 +1448,6 @@ class SelfPlayTaskA2(AbstractTask):
         plt.savefig(save_path)
         plt.close('all')
 
-    def plot_models(self):
-
-        game_epochs = [x * global_mini_batch_size for x in range(len(self.additional_info['model_1_win_predictions']))]
-
-        # --- Plotting ---
-        epochs = [x for x in range(len(self.additional_info['model_1_win_predictions']))]
-        gs = gridspec.GridSpec(1, 2)
-        fig = plt.figure(figsize=(12, 4))  # default [6.4, 4.8], W x H  9x6, 12x8
-        fig.suptitle('Results', fontsize=16)
-
-
-        # Model illegal moves
-        plt.subplot(gs[0, 0])
-        plt.plot(epochs, self.additional_info['model_1_illegal_moves'], label='Model 1')
-        plt.plot(epochs, self.additional_info['model_2_illegal_moves'], label='Model 2')
-        plt.xlabel('Epochs')
-        plt.ylabel('Illegal Moves')
-        plt.legend()
-        plt.title('Illegal Moves')
-
-        # Model checkmates
-        plt.subplot(gs[0, 1])
-        plt.plot(epochs, self.additional_info['model_1_checkmates'], label='Model 1')
-        plt.plot(epochs, self.additional_info['model_2_checkmates'], label='Model 2')
-        plt.xlabel('Epochs')
-        plt.ylabel('Checkmates')
-        plt.legend()
-        plt.title('Checkmates')
-
-        # Model win predictions
-        # plt.subplot(gs[0, 2])
-        # plt.plot(epochs, self.additional_info['model_1_win_predictions'], label='Model 1')
-        # plt.plot(epochs, self.additional_info['model_2_win_predictions'], label='Model 2')
-        # plt.xlabel('Epochs')
-        # plt.ylabel('Win Predictions')
-        # plt.legend()
-        # plt.title('Win Predictions')
-
-        # Save and close
-        plt.tight_layout()
-        save_path = os.path.join(self.run_dir, 'model_plots_'+str(self.val_itr)+'.png')
-        plt.savefig(save_path)
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1297,15 +1455,11 @@ class SelfPlayTaskA2(AbstractTask):
 
 
 if __name__ == '__main__':
-    actor_path = config.model_path
-    actor_2_path = config.model_path
-    critic_path = config.model_path
+    actor_path = os.path.join(config.weights_dir, 'chess-gpt-a3-v10.weights.h5')
+    actor_2_path = os.path.join(config.weights_dir, 'chess-gpt-a3-v10.weights.h5')
+    critic_path = os.path.join(config.weights_dir, 'chess-gpt-a3-v10.weights.h5')
 
-    # actor_path = os.path.join(config.results_dir, 'run_1003', 'pretrained', 'actor_weights_50')
-    # actor_2_path = os.path.join(config.results_dir, 'run_1003', 'pretrained', 'actor_weights_2_50')
-    # critic_path = os.path.join(config.results_dir, 'run_1003', 'pretrained', 'critic_weights_50')
-
-    task = SelfPlayTaskA2(
+    task = SelfPlayTaskA3(
         run_num=run_dir,
         problem=None,
         epochs=100000,
@@ -1317,5 +1471,16 @@ if __name__ == '__main__':
         val_itr=run_dir_itr,
     )
     task.run()
+
+
+
+
+
+
+
+
+
+
+
 
 
